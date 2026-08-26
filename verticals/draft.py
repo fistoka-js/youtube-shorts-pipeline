@@ -42,6 +42,7 @@ def generate_draft(
 
     # Research
     research = research_topic(news)
+    research_found = "No live research available" not in research
 
     # Platform config
     platform_key = platform if platform != "all" else "shorts"
@@ -83,7 +84,23 @@ def generate_draft(
 
     channel_note = f"\nChannel context: {channel_context}" if channel_context else ""
 
-    prompt = f"""You are writing a {platform_label} script ({max_words} words max, ~60-90 seconds spoken).{channel_note}
+    no_research_warning = ""
+    if not research_found:
+        no_research_warning = """
+⚠️ CRITICAL — NO RESEARCH WAS FOUND FOR THIS TOPIC ⚠️
+You have ZERO verified facts about this specific topic. This is very likely a
+niche, new, or obscure subject with little to no web presence.
+You are STRICTLY FORBIDDEN from inventing, guessing, or implying specific
+claims, features, statistics, or how something works. Do NOT write sentences
+like "it does X" or "it's known for Y" about the topic itself.
+Instead, write the script AS AN OPEN QUESTION OR INTRODUCTION ONLY — e.g. frame
+it as "here's something I came across, here's what it claims to be" rather
+than asserting how it functions. Explicitly acknowledge uncertainty where
+relevant (e.g. "I couldn't verify..."). A vague-but-honest script is REQUIRED
+here — a specific-but-fabricated script is a serious failure.
+"""
+
+    prompt = f"""You are writing a {platform_label} script ({max_words} words max, ~60-90 seconds spoken).{channel_note}{no_research_warning}
 
 {script_context}
 
@@ -103,11 +120,13 @@ RULES:
 - Use one of the CTA OPTIONS at the end
 - Never use any of the NEVER USE phrases
 - B-roll prompts must follow the visual guidance (style, mood, preferred subjects)
-
+- Generate 15-20 b-roll prompts, one per key visual beat in the script (not every sentence needs one — skip CTAs, transitions, and abstract statements with nothing to show)
+- NEVER generate disturbing, graphic, violent, or unsettling imagery — if a script beat describes something negative (injury, distress, danger), depict it tastefully and indirectly (e.g. a vet's office, not the injury itself) or substitute a safe adjacent visual
+- Keep every prompt concrete and photographic: a specific subject, setting, and mood — not abstract concepts
 Output JSON exactly:
 {{
   "script": "...",
-  "broll_prompts": ["prompt for frame 1", "prompt for frame 2", "prompt for frame 3"],
+  "broll_prompts": ["prompt for scene 1", "prompt for scene 2", "... 15-20 total"],
   "youtube_title": "...",
   "youtube_description": "...",
   "youtube_tags": "tag1,tag2,tag3",
@@ -147,9 +166,9 @@ Output JSON exactly:
             draft[field] = str(draft[field])
     if "broll_prompts" in draft:
         if not isinstance(draft["broll_prompts"], list):
-            draft["broll_prompts"] = ["Cinematic landscape"] * 3
+            draft["broll_prompts"] = ["Cinematic landscape"] * 12
         else:
-            draft["broll_prompts"] = [str(p) for p in draft["broll_prompts"][:3]]
+            draft["broll_prompts"] = [str(p) for p in draft["broll_prompts"][:20]]
 
     # Append visual prompt suffix to b-roll prompts
     suffix = get_visual_prompt_suffix(profile)

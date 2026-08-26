@@ -18,7 +18,7 @@ def _has_ass_filter() -> bool:
         return False
 
 
-def _whisper_word_timestamps(audio_path: Path, lang: str = "en") -> list[dict]:
+def _whisper_word_timestamps(audio_path: Path, lang: str = "en", script_text: str = "") -> list[dict]:
     """Get word-level timestamps from Whisper.
 
     Returns list of {"word": str, "start": float, "end": float}.
@@ -31,29 +31,117 @@ def _whisper_word_timestamps(audio_path: Path, lang: str = "en") -> list[dict]:
 
     log("Running Whisper for word-level timestamps...")
     model = whisper.load_model("base")
+    clean_prompt = script_text.replace("—", ",").replace("–", ",") if script_text else None
     result = model.transcribe(
         str(audio_path),
         language=lang[:2],
         word_timestamps=True,
+        initial_prompt=clean_prompt,
     )
 
-    words = []
+    raw_words = []
     for segment in result.get("segments", []):
         for w in segment.get("words", []):
-            words.append({
+            raw_words.append({
                 "word": w["word"].strip(),
                 "start": w["start"],
                 "end": w["end"],
             })
 
+    # Merge tokens that Whisper split on a hyphen (e.g. "cry" + "-like" -> "cry-like")
+    merged = []
+    for w in raw_words:
+        if merged and w["word"].startswith("-"):
+            merged[-1]["word"] += w["word"]
+            merged[-1]["end"] = w["end"]
+        else:
+            merged.append(w)
+
+    # Strip stray em/en dashes and drop empty tokens
+    cleaned = []
+    for w in merged:
+        w["word"] = w["word"].replace("—", "").replace("–", "").strip()
+        if w["word"]:
+            cleaned.append(w)
+
+    # Force strictly increasing, non-overlapping timestamps. Whisper occasionally
+    # emits out-of-order or overlapping words on fast/mumbled speech; without this,
+    # multiple captions can render simultaneously ("flashing").
+    fixed = []
+    prev_end = 0.0
+    for w in cleaned:
+        start = max(w["start"], prev_end)
+        end = max(w["end"], start + 0.05)
+        fixed.append({"word": w["word"], "start": start, "end": end})
+        prev_end = end
+
+    # Make each word's display window run continuously until the next word starts,
+    # so there is never a blank gap on screen between words — except when the real
+    # gap is long (a genuine pause), in which case we cap display time instead of
+    # holding one word artificially long.
+    # Estimate a realistic seconds-per-character rate from words whose original
+    # Whisper timing looks trustworthy (not suspiciously compressed).
+    reliable = [w for w in fixed if (w["end"] - w["start"]) >= 0.08]
+    if reliable:
+        total_chars = sum(len(w["word"]) for w in reliable)
+        total_time = sum(w["end"] - w["start"] for w in reliable)
+        sec_per_char = (total_time / total_chars) if total_chars else 0.05
+    else:
+        sec_per_char = 0.05
+    sec_per_char = max(sec_per_char, 0.02)  # sane floor
+
+    max_display = 1.2  # long genuine pauses don't leave one word "stuck" on screen
+    words = []
+    cursor = 0.0
+    i = 0
+    while i < len(fixed):
+        w = fixed[i]
+        orig_dur = w["end"] - w["start"]
+        if orig_dur < 0.08:
+            # Compressed cluster: gather consecutive suspect words and redistribute
+            # time proportional to word length, using the estimated speaking rate.
+            cluster = [w]
+            j = i + 1
+            while j < len(fixed) and (fixed[j]["end"] - fixed[j]["start"]) < 0.08:
+                cluster.append(fixed[j])
+                j += 1
+            start = max(cluster[0]["start"], cursor)
+            for cw in cluster:
+                dur = max(len(cw["word"]) * sec_per_char, 0.12)
+                end = start + dur
+                words.append({"word": cw["word"], "start": start, "end": end})
+                cursor = end
+                start = end
+            i = j
+        else:
+            start = max(w["start"], cursor)
+            if i + 1 < len(fixed):
+                natural_end = fixed[i + 1]["start"]
+            else:
+                natural_end = w["end"]
+            end = max(natural_end, start + 0.15)
+            end = min(end, start + max_display)
+            if end <= start:
+                end = start + 0.05
+            words.append({"word": w["word"], "start": start, "end": end})
+            cursor = end
+            i += 1
+
     log(f"Got {len(words)} word timestamps.")
     return words
 
-
 def _group_words(words: list[dict], group_size: int = 4) -> list[list[dict]]:
     groups = []
-    for i in range(0, len(words), group_size):
-        groups.append(words[i:i + group_size])
+    current = []
+    for w in words:
+        current.append(w)
+        text = w.get("word", "").strip()
+        ends_sentence = text.endswith((".", "!", "?"))
+        if len(current) >= group_size or ends_sentence:
+            groups.append(current)
+            current = []
+    if current:
+        groups.append(current)
     return groups
 
 
@@ -181,6 +269,7 @@ def generate_captions(
     words_per_group: int = 4,
     font_family: str = "Arial",
     font_size: int = 72,
+    script_text: str = "",
 ) -> dict:
     """Generate captions: ASS (for burn-in) + SRT (for YouTube upload).
 
@@ -194,7 +283,7 @@ def generate_captions(
 
     Returns dict with keys: srt_path, ass_path, words (for music ducking).
     """
-    words = _whisper_word_timestamps(audio_path, lang)
+    words = _whisper_word_timestamps(audio_path, lang, script_text=script_text)
 
     result = {"words": words}
 

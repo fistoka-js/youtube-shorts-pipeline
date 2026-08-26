@@ -10,7 +10,7 @@ from pathlib import Path
 # ─────────────────────────────────────────────────────
 # Skill home directory — all data lives here
 # ─────────────────────────────────────────────────────
-SKILL_DIR = Path.home() / ".verticals"
+SKILL_DIR = Path(r"E:\Youtube Project\youtube-shorts-pipeline\.verticals")
 DRAFTS_DIR = SKILL_DIR / "drafts"
 MEDIA_DIR = SKILL_DIR / "media"
 LOGS_DIR = SKILL_DIR / "logs"

@@ -72,13 +72,26 @@ def build_duck_filter(speech_regions: list[tuple[float, float]], buffer: float =
     return f"volume='if({condition_expr}, {vol_speech}, {vol_gap})':eval=frame"
 
 
+def _score_track(track: Path, keywords: list[str]) -> int:
+    """Score a track filename against mood/tag keywords (case-insensitive substring match)."""
+    name = track.stem.lower().replace("-", " ").replace("_", " ")
+    score = 0
+    for kw in keywords:
+        kw = kw.lower().strip()
+        if kw and kw in name:
+            score += 1
+    return score
+
+
 def select_and_prepare_music(
     voiceover_path: Path,
     work_dir: Path,
     duck_speech: float = 0.12,
     duck_gap: float = 0.25,
+    mood_keywords: list[str] | None = None,
 ) -> dict:
-    """Select a random track, build duck filter from speech regions.
+    """Select a track matching the niche's mood keywords (falls back to random
+    among top scorers, or fully random if nothing matches), build duck filter.
 
     Returns dict with track_path and duck_filter for use by assemble.py.
     """
@@ -87,8 +100,19 @@ def select_and_prepare_music(
         log("No music tracks found in music/ — skipping background music")
         return {}
 
-    track = random.choice(tracks)
-    log(f"Selected music track: {track.name}")
+    if mood_keywords:
+        scored = [(t, _score_track(t, mood_keywords)) for t in tracks]
+        best_score = max(s for _, s in scored)
+        if best_score > 0:
+            candidates = [t for t, s in scored if s == best_score]
+            track = random.choice(candidates)
+            log(f"Selected music track (mood match, score {best_score}): {track.name}")
+        else:
+            track = random.choice(tracks)
+            log(f"No mood match found — random pick: {track.name}")
+    else:
+        track = random.choice(tracks)
+        log(f"Selected music track: {track.name}")
 
     # Get speech regions for ducking
     speech_regions = _get_speech_regions(voiceover_path)

@@ -18,46 +18,76 @@ def _fetch_ddg(keywords: str) -> str:
     return r.text
 
 
+def _parse_snippets(html: str) -> list[str]:
+    """Extract result snippets from a DuckDuckGo HTML results page."""
+    snippets = []
+
+    class Parser(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self._in = False
+            self._text = []
+
+        def handle_starttag(self, tag, attrs):
+            d = dict(attrs)
+            if tag == "a" and "result__snippet" in d.get("class", ""):
+                self._in = True
+                self._text = []
+
+        def handle_endtag(self, tag):
+            if self._in and tag == "a":
+                snippets.append("".join(self._text).strip())
+                self._in = False
+
+        def handle_data(self, data):
+            if self._in:
+                self._text.append(data)
+
+    p = Parser()
+    p.feed(html)
+    return snippets
+
+
 def research_topic(news: str) -> str:
-    """DuckDuckGo search -> extract facts for anti-hallucination gate."""
+    """Multi-angle DuckDuckGo search -> extract facts for anti-hallucination gate.
+
+    Runs a few varied queries (base topic, "how it works", "review") to widen
+    coverage versus a single search, which matters most for niche topics with
+    thin web presence. Falls back gracefully if any individual query fails.
+    """
     log("Researching topic via DuckDuckGo...")
     keywords = extract_keywords(news)
 
-    try:
-        html = _fetch_ddg(keywords)
+    query_variants = [
+        keywords,
+        f"{keywords} explained",
+        f"{keywords} review",
+    ]
 
-        snippets = []
+    all_snippets = []
+    seen = set()
+    queries_succeeded = 0
 
-        class Parser(HTMLParser):
-            def __init__(self):
-                super().__init__()
-                self._in = False
-                self._text = []
+    for query in query_variants:
+        try:
+            html = _fetch_ddg(query)
+            snippets = _parse_snippets(html)
+            for s in snippets:
+                s = s[:300]  # sanitize: truncate each to limit prompt injection surface
+                if s and s not in seen:
+                    seen.add(s)
+                    all_snippets.append(s)
+            if snippets:
+                queries_succeeded += 1
+        except Exception as e:
+            log(f"  Query '{query}' failed: {e}")
+            continue
 
-            def handle_starttag(self, tag, attrs):
-                d = dict(attrs)
-                if tag == "a" and "result__snippet" in d.get("class", ""):
-                    self._in = True
-                    self._text = []
+    if all_snippets:
+        # Cap total volume so the research prompt doesn't grow unbounded
+        research = "\n".join(all_snippets[:15])
+        log(f"Found {len(all_snippets)} unique snippets across {queries_succeeded}/{len(query_variants)} queries.")
+        return research
 
-            def handle_endtag(self, tag):
-                if self._in and tag == "a":
-                    snippets.append("".join(self._text).strip())
-                    self._in = False
-
-            def handle_data(self, data):
-                if self._in:
-                    self._text.append(data)
-
-        p = Parser()
-        p.feed(html)
-        # Sanitize snippets: truncate each to limit prompt injection surface
-        snippets = [s[:300] for s in snippets]
-        research = "\n".join(snippets[:8]) if snippets else ""
-        if research:
-            log(f"Found {len(snippets)} snippets.")
-            return research
-    except Exception as e:
-        log(f"Research failed: {e} — proceeding without.")
-
+    log("No research results from any query — proceeding without.")
     return f"Topic: {news}\n(No live research available — script must stay general.)"

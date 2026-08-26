@@ -27,7 +27,7 @@ SCOPES = [
     "https://www.googleapis.com/auth/youtube.force-ssl",  # needed for captions; narrower than full youtube scope
 ]
 
-SKILL_DIR  = Path.home() / ".verticals"
+SKILL_DIR  = Path(r"E:\Youtube Project\youtube-shorts-pipeline\.verticals")
 TOKEN_PATH = SKILL_DIR / "youtube_token.json"
 
 

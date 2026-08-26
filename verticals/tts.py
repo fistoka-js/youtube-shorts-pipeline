@@ -42,10 +42,10 @@ EDGE_VOICES = {
 }
 
 
-async def _edge_tts_generate(text: str, voice: str, output_path: Path):
+async def _edge_tts_generate(text: str, voice: str, output_path: Path, rate: str = "+12%"):
     """Generate audio via edge-tts (async)."""
     import edge_tts
-    communicate = edge_tts.Communicate(text, voice)
+    communicate = edge_tts.Communicate(text, voice, rate=rate)
     await communicate.save(str(output_path))
 
 

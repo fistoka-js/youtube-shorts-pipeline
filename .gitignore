@@ -28,3 +28,8 @@ venv/
 .DS_Store
 Thumbs.db
 uv.lock
+
+# Debug/test artifacts
+test_output*.mp4
+run_log.txt
+*.log

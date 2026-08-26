@@ -3,16 +3,12 @@
 from pathlib import Path
 
 from .broll import animate_frame
-from .config import MEDIA_DIR, run_cmd
+from .config import MEDIA_DIR, VIDEO_WIDTH, VIDEO_HEIGHT, run_cmd
 from .log import log
 
 
 def _ffmpeg_has_libass() -> bool:
-    """Check whether this ffmpeg build ships the `ass` filter (libass).
-
-    Some builds (e.g. minimal/static ones) omit libass; burning captions in
-    would fail with `No such filter: 'ass'`, so we skip burn-in instead.
-    """
+    """Check whether this ffmpeg build ships the `ass` filter (libass)."""
     try:
         r = run_cmd(["ffmpeg", "-hide_banner", "-filters"], capture=True)
         return any(line.split()[1:2] == ["ass"] for line in r.stdout.splitlines())
@@ -30,8 +26,27 @@ def get_audio_duration(path: Path) -> float:
     return float(r.stdout.strip())
 
 
+def _prepare_segment(frame: dict, out_path: Path, duration: float, effect: str) -> Path:
+    """Turn one b-roll item (video clip or still image) into a fixed-duration
+    portrait segment, ready for concatenation."""
+    if frame.get("type") == "video":
+        src = frame["path"]
+        vf = (
+            f"scale={VIDEO_WIDTH}:{VIDEO_HEIGHT}:force_original_aspect_ratio=increase,"
+            f"crop={VIDEO_WIDTH}:{VIDEO_HEIGHT}"
+        )
+        run_cmd([
+            "ffmpeg", "-i", str(src), "-t", str(duration),
+            "-vf", vf, "-an", "-r", "30", "-pix_fmt", "yuv420p",
+            str(out_path), "-y", "-loglevel", "quiet",
+        ])
+    else:
+        animate_frame(frame["path"], out_path, duration, effect)
+    return out_path
+
+
 def assemble_video(
-    frames: list[Path],
+    frames: list[dict],
     voiceover: Path,
     out_dir: Path,
     job_id: str,
@@ -39,25 +54,26 @@ def assemble_video(
     ass_path: str | None = None,
     music_path: str | None = None,
     duck_filter: str | None = None,
+    title: str | None = None,
 ) -> Path:
-    """Assemble final video from frames, voiceover, captions, and music."""
+    """Assemble final video from b-roll (video clips + image fallbacks), voiceover, captions, and music."""
     log("Assembling video...")
     duration = get_audio_duration(voiceover)
     per_frame = duration / len(frames)
     effects = ["zoom_in", "pan_right", "zoom_out"]
 
-    # Animate each frame with Ken Burns effect
-    animated = []
+    # Prepare each b-roll item as a fixed-duration segment
+    segments = []
     for i, frame in enumerate(frames):
-        anim = out_dir / f"anim_{i}.mp4"
-        animate_frame(frame, anim, per_frame + 0.1, effects[i % len(effects)])
-        animated.append(anim)
+        seg = out_dir / f"seg_{i}.mp4"
+        _prepare_segment(frame, seg, per_frame + 0.1, effects[i % len(effects)])
+        segments.append(seg)
 
-    # Concat animated segments (escape single quotes for ffmpeg concat demuxer)
+    # Concat segments (escape single quotes for ffmpeg concat demuxer)
     concat_file = out_dir / "concat.txt"
     def _esc(p):
         return str(p).replace("'", "'\\''" )
-    concat_file.write_text("\n".join(f"file '{_esc(p)}'" for p in animated))
+    concat_file.write_text("\n".join(f"file '{_esc(p)}'" for p in segments))
 
     merged_video = out_dir / "merged_video.mp4"
     run_cmd([
@@ -67,15 +83,20 @@ def assemble_video(
     ])
 
     # Build the final ffmpeg command with optional captions + music
-    out_path = MEDIA_DIR / f"verticals_{job_id}_{lang}.mp4"
+    import re
+    safe_title = re.sub(r'[^\w\s-]', '', title or job_id).strip()
+    safe_title = re.sub(r'[\s_]+', '_', safe_title)
+    if len(safe_title) > 50:
+        safe_title = safe_title[:50].rsplit('_', 1)[0]
+    safe_title = safe_title or job_id
+    out_path = MEDIA_DIR / f"{safe_title}_{lang}.mp4"
 
     # Determine video filter (captions via ASS)
     vf_parts = []
     if ass_path and Path(ass_path).exists():
         if _ffmpeg_has_libass():
-            # Escape special chars in path for ffmpeg filter
-            escaped_ass = str(ass_path).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
-            vf_parts.append(f"ass={escaped_ass}")
+            escaped_ass = str(ass_path).replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
+            vf_parts.append(f"ass='{escaped_ass}'")
         else:
             log(
                 "WARNING: this ffmpeg build has no libass — captions will NOT "
@@ -86,16 +107,13 @@ def assemble_video(
     vf = ",".join(vf_parts) if vf_parts else None
 
     if music_path and Path(music_path).exists():
-        # Three inputs: video, voiceover, music
         cmd = ["ffmpeg", "-i", str(merged_video), "-i", str(voiceover)]
 
-        # Loop music to match video duration, apply ducking
         music_filter = f"[2:a]aloop=loop=-1:size=2e+09,atrim=0:{duration}"
         if duck_filter:
             music_filter += f",{duck_filter}"
         music_filter += "[music]"
 
-        # Mix voiceover + ducked music
         audio_filter = f"{music_filter};[1:a][music]amix=inputs=2:duration=first:dropout_transition=2[aout]"
 
         cmd += [
@@ -113,7 +131,6 @@ def assemble_video(
             str(out_path), "-y", "-loglevel", "quiet",
         ]
     else:
-        # Two inputs: video + voiceover (no music)
         cmd = ["ffmpeg", "-i", str(merged_video), "-i", str(voiceover)]
 
         if vf:

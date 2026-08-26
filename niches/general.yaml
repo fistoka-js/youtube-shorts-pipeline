@@ -57,7 +57,7 @@ voice:
   energy: "warm, engaging, natural"
   suggested_voices:
     edge_tts:
-      en: "en-US-GuyNeural"
+      en: "en-US-AndrewNeural"
       hi: "hi-IN-MadhurNeural"
     "60db":
       voice_id: "fbb75ed2-975a-40c7-9e06-38e30524a9a1"
@@ -75,7 +75,7 @@ captions:
   words_per_group: 4
 
 music:
-  mood: "ambient, subtle, no lyrics"
+  mood: "upbeat, quirky, playful, curious energy, no lyrics"
   energy: "medium"
   tags: ["ambient", "cinematic"]
   duck_volume_speech: 0.12

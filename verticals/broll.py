@@ -1,4 +1,4 @@
-"""Gemini Imagen b-roll generation + Ken Burns animation."""
+"""Pexels stock video b-roll + Pollinations image fallback + Ken Burns animation."""
 
 import base64
 from pathlib import Path
@@ -11,46 +11,78 @@ from .log import log
 from .retry import with_retry
 
 
-@with_retry(max_retries=3, base_delay=2.0)
-def _generate_image_gemini(prompt: str, output_path: Path, api_key: str):
-    """Generate image via Gemini native image generation (free tier compatible)."""
-    url = (
-        "https://generativelanguage.googleapis.com/v1beta"
-        "/models/gemini-2.0-flash-exp-image-generation:generateContent"
-    )
-    body = {
-        "contents": [{"parts": [{"text": f"Generate an image: {prompt}"}]}],
-        "generationConfig": {"responseModalities": ["IMAGE", "TEXT"]},
-    }
-    r = requests.post(
-        url, json=body, timeout=90,
-        headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
+def get_pexels_key() -> str:
+    """Load PEXELS_API_KEY from env or config.json."""
+    import os
+    import json
+    if os.environ.get("PEXELS_API_KEY"):
+        return os.environ["PEXELS_API_KEY"]
+    try:
+        from .config import SKILL_DIR
+        config_path = SKILL_DIR / "config.json"
+        if config_path.exists():
+            data = json.loads(config_path.read_text())
+            return data.get("PEXELS_API_KEY", "")
+    except Exception:
+        pass
+    return ""
+
+
+def _search_pexels_video(query: str, api_key: str) -> str | None:
+    """Search Pexels for a portrait-friendly video clip. Returns a direct MP4 URL or None."""
+    r = requests.get(
+        "https://api.pexels.com/videos/search",
+        params={"query": query, "orientation": "portrait", "per_page": 3, "size": "medium"},
+        headers={"Authorization": api_key},
+        timeout=30,
     )
     if r.status_code != 200:
-        try:
-            detail = r.json().get("error", {}).get("message", r.text[:200])
-        except Exception:
-            detail = r.text[:200]
-        hint = ""
-        if r.status_code == 403:
-            hint = (
-                " — check that GEMINI_API_KEY is set in this environment and is "
-                "an AI Studio key (https://aistudio.google.com/apikey), not a "
-                "Vertex AI / service-account credential"
-            )
-        raise RuntimeError(f"Gemini API {r.status_code}: {detail}{hint}")
+        return None
     data = r.json()
-    # Extract image from response parts
-    for part in data.get("candidates", [{}])[0].get("content", {}).get("parts", []):
-        if "inlineData" in part:
-            img_b64 = part["inlineData"]["data"]
-            output_path.write_bytes(base64.b64decode(img_b64))
-            return
-    raise RuntimeError("No image in Gemini response")
+    videos = data.get("videos", [])
+    if not videos:
+        return None
+    # Prefer an existing portrait file close to 1080x1920; fall back to the largest available
+    video = videos[0]
+    files = video.get("video_files", [])
+    portrait_files = [f for f in files if f.get("height", 0) > f.get("width", 0)]
+    candidates = portrait_files or files
+    if not candidates:
+        return None
+    best = max(candidates, key=lambda f: f.get("height", 0))
+    return best.get("link")
+
+
+def _download_and_crop_video(url: str, out_path: Path, duration: float) -> Path:
+    """Download a Pexels clip and crop/scale/trim it to exact portrait dimensions."""
+    tmp_path = out_path.with_suffix(".raw.mp4")
+    r = requests.get(url, timeout=90, stream=True)
+    r.raise_for_status()
+    with open(tmp_path, "wb") as f:
+        for chunk in r.iter_content(chunk_size=1 << 16):
+            f.write(chunk)
+
+    vf = (
+        f"scale={VIDEO_WIDTH}:{VIDEO_HEIGHT}:force_original_aspect_ratio=increase,"
+        f"crop={VIDEO_WIDTH}:{VIDEO_HEIGHT}"
+    )
+    run_cmd([
+        "ffmpeg", "-i", str(tmp_path), "-t", str(duration),
+        "-vf", vf, "-an", "-r", "30", "-pix_fmt", "yuv420p",
+        str(out_path), "-y", "-loglevel", "quiet",
+    ])
+    tmp_path.unlink(missing_ok=True)
+    return out_path
+
+
+@with_retry(max_retries=3, base_delay=2.0)
+def _generate_image_gemini(prompt: str, output_path: Path, api_key: str):
+    """Unused now (kept for reference); Pollinations is the image fallback."""
+    raise RuntimeError("Gemini image path disabled — using Pollinations fallback")
 
 
 def _fallback_frame(i: int, out_dir: Path) -> Path:
-    """Solid colour fallback frame if Gemini fails."""
+    """Solid colour fallback frame if all else fails."""
     colors = [(20, 20, 60), (40, 10, 40), (10, 30, 50)]
     img = Image.new("RGB", (VIDEO_WIDTH, VIDEO_HEIGHT), colors[i % len(colors)])
     path = out_dir / f"broll_{i}.png"
@@ -58,48 +90,81 @@ def _fallback_frame(i: int, out_dir: Path) -> Path:
     return path
 
 
-def generate_broll(prompts: list, out_dir: Path) -> list[Path]:
-    """Generate 3 b-roll frames via Gemini Imagen, with fallback."""
-    api_key = get_gemini_key()
-    if not api_key:
-        log(
-            "GEMINI_API_KEY not set — using solid-color fallback frames. "
-            "Get an AI Studio key at https://aistudio.google.com/apikey "
-            "(must be an AI Studio key; Vertex AI / service-account credentials "
-            "are rejected with a 403 'unregistered callers' error)."
-        )
-        return [_fallback_frame(i, out_dir) for i in range(min(3, max(len(prompts), 1)))]
+def _generate_pollinations_image(prompt: str, out_path: Path) -> Path:
+    """Generate a still image via Pollinations as fallback when no video match exists."""
+    encoded_prompt = requests.utils.quote(prompt, safe="")
+    url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width={VIDEO_WIDTH}&height={VIDEO_HEIGHT}&nologo=true"
+    resp = requests.get(url, timeout=60)
+    resp.raise_for_status()
+    out_path.write_bytes(resp.content)
+    img = Image.open(out_path)
+    if img.size != (VIDEO_WIDTH, VIDEO_HEIGHT):
+        img = img.resize((VIDEO_WIDTH, VIDEO_HEIGHT), Image.LANCZOS)
+        img.save(out_path)
+    return out_path
+
+
+def generate_broll(prompts: list, out_dir: Path, clip_duration: float = 4.0) -> list[dict]:
+    """Generate b-roll: real Pexels video clips where a good match exists,
+    Pollinations-generated stills (for Ken Burns) as fallback otherwise.
+
+    Returns a list of dicts: {"path": Path, "type": "video" | "image"}.
+    """
+    import time
+
+    pexels_key = get_pexels_key()
     frames = []
+    total = len(prompts)
 
-    for i, prompt in enumerate(prompts[:3]):
-        out_path = out_dir / f"broll_{i}.png"
-        log(f"Generating b-roll frame {i+1}/3 via Gemini Imagen...")
+    for i, prompt in enumerate(prompts):
+        log(f"Sourcing b-roll {i+1}/{total}...")
 
-        try:
-            _generate_image_gemini(prompt, out_path, api_key)
+        # Derive a short search query from the prompt: strip technical/cinematography
+        # jargon (Pexels indexes real footage, not photographer-brief phrasing) and
+        # keep just the subject.
+        import re
+        raw_query = prompt.split(".")[0].split(",")[0].strip()
+        jargon = [
+            "extreme close-up of", "extreme close up of", "close-up of", "close up of",
+            "cinematic establishing shot of", "cinematic shot of", "wide cinematic shot of",
+            "wide shot of", "dramatic close-up of", "dramatic low-angle shot of",
+            "slow-motion close-up of", "slow motion close-up of", "overhead shot of",
+            "aerial cinematic shot of", "atmospheric shot of", "a shot of",
+        ]
+        query = raw_query
+        for j in jargon:
+            query = re.sub(j, "", query, flags=re.IGNORECASE).strip()
+        query = query or raw_query  # never end up with an empty query
 
-            # Resize/crop to 9:16 portrait
-            img = Image.open(out_path).convert("RGB")
-            target_w, target_h = VIDEO_WIDTH, VIDEO_HEIGHT
-            orig_w, orig_h = img.size
-            scale = max(target_w / orig_w, target_h / orig_h)
-            new_w, new_h = int(orig_w * scale), int(orig_h * scale)
-            img = img.resize((new_w, new_h), Image.LANCZOS)
-            left = (new_w - target_w) // 2
-            top = (new_h - target_h) // 2
-            img = img.crop((left, top, left + target_w, top + target_h))
-            img.save(out_path)
-            frames.append(out_path)
+        got_video = False
+        if pexels_key:
+            try:
+                video_url = _search_pexels_video(query, pexels_key)
+                if video_url:
+                    out_path = out_dir / f"broll_{i}.mp4"
+                    _download_and_crop_video(video_url, out_path, clip_duration)
+                    frames.append({"path": out_path, "type": "video"})
+                    got_video = True
+                    log(f"  Found Pexels footage: \"{query}\"")
+            except Exception as e:
+                log(f"  Pexels search/download failed: {e}")
 
-        except Exception as e:
-            log(f"Frame {i+1} failed: {e} — using fallback")
-            frames.append(_fallback_frame(i, out_dir))
+        if not got_video:
+            try:
+                out_path = out_dir / f"broll_{i}.png"
+                _generate_pollinations_image(prompt, out_path)
+                frames.append({"path": out_path, "type": "image"})
+                log(f"  No stock match — generated fallback image")
+                time.sleep(1.0)
+            except Exception as e:
+                log(f"  Fallback image failed: {e} — using solid color")
+                frames.append({"path": _fallback_frame(i, out_dir), "type": "image"})
 
     return frames
 
 
 def animate_frame(img_path: Path, out_path: Path, duration: float, effect: str = "zoom_in"):
-    """Ken Burns animation on a single frame."""
+    """Ken Burns animation on a single still frame (used only for image fallbacks)."""
     fps = 30
     frames = int(duration * fps)
     w, h = VIDEO_WIDTH, VIDEO_HEIGHT

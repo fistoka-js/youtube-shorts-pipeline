@@ -100,11 +100,14 @@ def cmd_produce(args):
 
     # B-roll
     if force or not state.is_done("broll"):
-        frames = generate_broll(draft.get("broll_prompts", ["Cinematic landscape"] * 3), work_dir)
-        state.complete_stage("broll", {"frames": [str(f) for f in frames]})
+        frames = generate_broll(draft.get("broll_prompts", ["Cinematic landscape"] * 12), work_dir)
+        state.complete_stage("broll", {
+            "frames": [{"path": str(f["path"]), "type": f["type"]} for f in frames]
+        })
     else:
         log("Skipping b-roll (already done)")
-        frames = [Path(f) for f in state.get_artifact("broll", "frames", [])]
+        raw = state.get_artifact("broll", "frames", [])
+        frames = [{"path": Path(f["path"]), "type": f["type"]} for f in raw]
 
     # Voiceover (niche-aware voice selection)
     if force or not state.is_done("voiceover"):
@@ -132,6 +135,7 @@ def cmd_produce(args):
             words_per_group=caption_config.get("words_per_group", 4),
             font_family=caption_config.get("font_family", "Arial"),
             font_size=int(caption_config.get("font_size", 72)),
+            script_text=draft.get("script", ""),
         )
         state.complete_stage("captions", {
             "srt_path": str(captions_result.get("srt_path", "")),
@@ -147,10 +151,14 @@ def cmd_produce(args):
     # Music (niche-aware mood/ducking)
     music_config = get_music_config(profile)
     if force or not state.is_done("music"):
+        _mood_str = music_config.get("mood", "")
+        _mood_kw = [w.strip() for w in _mood_str.replace(",", " ").split() if w.strip()]
+        _mood_kw += [str(t).strip() for t in music_config.get("tags", [])]
         music_result = select_and_prepare_music(
             vo_path, work_dir,
             duck_speech=music_config.get("duck_volume_speech", 0.12),
             duck_gap=music_config.get("duck_volume_gap", 0.25),
+            mood_keywords=_mood_kw,
         )
         state.complete_stage("music", {
             "track_path": str(music_result.get("track_path", "")),
@@ -168,6 +176,7 @@ def cmd_produce(args):
         video_path = assemble_video(
             frames=frames,
             voiceover=vo_path,
+            title=draft.get("script", "").split("?")[0].split(".")[0].split("!")[0].strip(),
             out_dir=work_dir,
             job_id=job_id,
             lang=lang,
