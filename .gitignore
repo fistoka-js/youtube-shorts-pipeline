@@ -33,3 +33,7 @@ uv.lock
 test_output*.mp4
 run_log.txt
 *.log
+check_*.py
+debug_*.txt
+debug_*.html
+!check_thumbnail.py

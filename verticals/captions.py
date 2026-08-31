@@ -1,8 +1,78 @@
 """Whisper word-level timestamps + ASS subtitle generation + Pillow fallback."""
 
+import difflib
+import re
 from pathlib import Path
 
 from .log import log
+
+
+def _normalize_word(w: str) -> str:
+    """Lowercase and strip punctuation, for comparison purposes only."""
+    return re.sub(r"[^\w']", "", w).lower()
+
+
+def _align_to_script(whisper_words: list[dict], script_text: str) -> list[dict]:
+    """Correct Whisper's transcribed word TEXT using the real script as
+    ground truth, while keeping Whisper's real timestamps.
+
+    Whisper knows WHEN words were spoken (from the real audio) but can
+    mishear common words (e.g. "purr" -> "per") or occasionally hallucinate
+    phrases that were never said. Since we know the exact script that was
+    fed to the TTS engine, we align Whisper's words against the script's
+    words and:
+      - where they line up 1:1 but disagree (a mishearing), keep Whisper's
+        timestamp but use the script's word
+      - where Whisper has an extra word the script doesn't (a
+        hallucination), drop it
+      - where the script has a word Whisper missed, insert it with a
+        timestamp interpolated between its neighbors
+      - where a mismatched stretch can't be cleanly matched word-for-word,
+        leave Whisper's original words alone rather than risk a wrong guess
+    """
+    if not script_text or not whisper_words:
+        return whisper_words
+
+    script_words = script_text.split()
+    if not script_words:
+        return whisper_words
+
+    whisper_norm = [_normalize_word(w["word"]) for w in whisper_words]
+    script_norm = [_normalize_word(w) for w in script_words]
+
+    matcher = difflib.SequenceMatcher(None, whisper_norm, script_norm, autojunk=False)
+    corrected = []
+
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            corrected.extend(whisper_words[i1:i2])
+
+        elif tag == "replace":
+            w_slice = whisper_words[i1:i2]
+            s_slice = script_words[j1:j2]
+            if len(w_slice) == len(s_slice):
+                for ww, sw in zip(w_slice, s_slice):
+                    corrected.append({"word": sw, "start": ww["start"], "end": ww["end"]})
+            else:
+                corrected.extend(w_slice)
+
+        elif tag == "delete":
+            continue  # hallucinated word(s) - drop
+
+        elif tag == "insert":
+            prev_end = corrected[-1]["end"] if corrected else 0.0
+            next_start = whisper_words[i2]["start"] if i2 < len(whisper_words) else prev_end + 1.0
+            missing = script_words[j1:j2]
+            span = max(next_start - prev_end, 0.05)
+            step = span / max(len(missing), 1)
+            for k, sw in enumerate(missing):
+                corrected.append({
+                    "word": sw,
+                    "start": prev_end + step * k,
+                    "end": prev_end + step * (k + 1),
+                })
+
+    return corrected
 
 
 def _has_ass_filter() -> bool:
@@ -31,12 +101,18 @@ def _whisper_word_timestamps(audio_path: Path, lang: str = "en", script_text: st
 
     log("Running Whisper for word-level timestamps...")
     model = whisper.load_model("base")
-    clean_prompt = script_text.replace("—", ",").replace("–", ",") if script_text else None
+    # NOTE: we deliberately do NOT pass initial_prompt. Whisper treats it as
+    # speech that happened immediately before the audio and tries to
+    # "continue" from it - feeding it script text causes Whisper to skip
+    # re-transcribing matching audio and can hallucinate nearby text.
+    # Instead we transcribe with no bias at all, then correct known-good
+    # vocabulary afterward by aligning against the real script (see
+    # _align_to_script below) - this can't reintroduce that bug since it
+    # never touches Whisper's own decoding.
     result = model.transcribe(
         str(audio_path),
         language=lang[:2],
         word_timestamps=True,
-        initial_prompt=clean_prompt,
     )
 
     raw_words = []
@@ -57,12 +133,19 @@ def _whisper_word_timestamps(audio_path: Path, lang: str = "en", script_text: st
         else:
             merged.append(w)
 
-    # Strip stray em/en dashes and drop empty tokens
-    cleaned = []
-    for w in merged:
+    # Drop any fully-empty tokens before alignment
+    cleaned = [w for w in merged if w["word"].strip()]
+
+    # Correct Whisper's text against the real script (ground truth), fixing
+    # mishearings and dropping hallucinated words, while keeping Whisper's
+    # own real timestamps.
+    cleaned = _align_to_script(cleaned, script_text)
+
+    # Strip stray em/en dashes AFTER alignment, since the script's own words
+    # (pulled in by _align_to_script) can reintroduce them.
+    for w in cleaned:
         w["word"] = w["word"].replace("—", "").replace("–", "").strip()
-        if w["word"]:
-            cleaned.append(w)
+    cleaned = [w for w in cleaned if w["word"]]
 
     # Force strictly increasing, non-overlapping timestamps. Whisper occasionally
     # emits out-of-order or overlapping words on fast/mumbled speech; without this,

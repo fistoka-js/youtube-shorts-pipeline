@@ -8,8 +8,10 @@ from PIL import Image
 
 from .config import VIDEO_WIDTH, VIDEO_HEIGHT, get_gemini_key, run_cmd
 from .log import log
-from .retry import with_retry
+import re
 
+from .log import log
+from .retry import with_retry
 
 def get_pexels_key() -> str:
     """Load PEXELS_API_KEY from env or config.json."""
@@ -42,8 +44,25 @@ def _search_pexels_video(query: str, api_key: str) -> str | None:
     videos = data.get("videos", [])
     if not videos:
         return None
-    # Prefer an existing portrait file close to 1080x1920; fall back to the largest available
+
+    # Pexels doesn't give us a relevance score, but each video's own "url"
+    # field is a human-readable slug generated from its title (e.g.
+    # ".../video/cat-playing-with-tape-1358988/"). Check the top few
+    # candidates for one whose slug actually contains a query keyword,
+    # instead of blindly trusting result #1 - which can occasionally be a
+    # poor match (e.g. searching "octopus eye" returning an unrelated
+    # close-up of a human forehead).
+    query_words = [w for w in re.findall(r"[a-z]+", query.lower()) if len(w) > 3]
     video = videos[0]
+    matched = False
+    for candidate in videos[:3]:
+        slug = candidate.get("url", "").lower()
+        if any(w in slug for w in query_words):
+            video = candidate
+            matched = True
+            break
+    if not matched:
+        log(f"  No confident keyword match for \"{query}\" in top results - using best guess")
     files = video.get("video_files", [])
     portrait_files = [f for f in files if f.get("height", 0) > f.get("width", 0)]
     candidates = portrait_files or files

@@ -115,6 +115,7 @@ PLATFORM_CONFIGS: dict[str, dict] = {
     "shorts": {"width": 1080, "height": 1920, "max_script_words": 180, "label": "YouTube Shorts"},
     "reels":  {"width": 1080, "height": 1920, "max_script_words": 150, "label": "Instagram Reels"},
     "tiktok": {"width": 1080, "height": 1920, "max_script_words": 150, "label": "TikTok"},
+    "long_form": {"width": 1920, "height": 1080, "max_script_words": 1800, "label": "YouTube long-form video"},
 }
 
 
@@ -226,6 +227,10 @@ def get_60db_key() -> str:
 
 def get_gemini_key() -> str:
     return _get_key("GEMINI_API_KEY")
+
+
+def get_tavily_key() -> str:
+    return _get_key("TAVILY_API_KEY")
 
 
 def get_youtube_token_path() -> Path:

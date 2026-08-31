@@ -48,7 +48,7 @@ voice:
   energy: "curious, building excitement"
   suggested_voices:
     edge_tts:
-      en: "en-US-GuyNeural"
+      en: "en-US-AndrewNeural"
     "60db":
       voice_id: "fbb75ed2-975a-40c7-9e06-38e30524a9a1"
       settings:

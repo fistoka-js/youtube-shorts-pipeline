@@ -1,67 +1,58 @@
-"""DuckDuckGo research — anti-hallucination gate."""
-
+"""Tavily research — anti-hallucination gate."""
 import requests
-from html.parser import HTMLParser
 
-from .config import extract_keywords
+from .config import extract_keywords, get_tavily_key
 from .log import log
 from .retry import with_retry
 
 
+def _truncate_at_sentence(text: str, max_chars: int = 500) -> str:
+    """Truncate text to at most max_chars, cutting at the last sentence-ending
+    punctuation before the limit so snippets don't chop off mid-word/mid-sentence.
+    Falls back to a word boundary if no good sentence break is found."""
+    if len(text) <= max_chars:
+        return text
+    truncated = text[:max_chars]
+    for punct in [". ", "! ", "? "]:
+        idx = truncated.rfind(punct)
+        if idx != -1 and idx > max_chars * 0.4:
+            return truncated[: idx + 1].strip()
+    idx = truncated.rfind(" ")
+    if idx != -1:
+        return truncated[:idx].strip() + "..."
+    return truncated.strip() + "..."
+
+
 @with_retry(max_retries=2, base_delay=2.0)
-def _fetch_ddg(keywords: str) -> str:
-    """Fetch search snippets from DuckDuckGo HTML endpoint."""
-    url = "https://html.duckduckgo.com/html/"
-    headers = {"User-Agent": "Mozilla/5.0 (compatible; research-bot/1.0)"}
-    r = requests.post(url, data={"q": keywords}, headers=headers, timeout=10)
+def _fetch_tavily(query: str) -> dict:
+    """Fetch search results from the Tavily API."""
+    api_key = get_tavily_key()
+    if not api_key:
+        raise RuntimeError("TAVILY_API_KEY not set — add it to config.json")
+    url = "https://api.tavily.com/search"
+    payload = {
+        "api_key": api_key,
+        "query": query,
+        "search_depth": "basic",
+        "max_results": 5,
+    }
+    r = requests.post(url, json=payload, timeout=15)
     r.raise_for_status()
-    return r.text
-
-
-def _parse_snippets(html: str) -> list[str]:
-    """Extract result snippets from a DuckDuckGo HTML results page."""
-    snippets = []
-
-    class Parser(HTMLParser):
-        def __init__(self):
-            super().__init__()
-            self._in = False
-            self._text = []
-
-        def handle_starttag(self, tag, attrs):
-            d = dict(attrs)
-            if tag == "a" and "result__snippet" in d.get("class", ""):
-                self._in = True
-                self._text = []
-
-        def handle_endtag(self, tag):
-            if self._in and tag == "a":
-                snippets.append("".join(self._text).strip())
-                self._in = False
-
-        def handle_data(self, data):
-            if self._in:
-                self._text.append(data)
-
-    p = Parser()
-    p.feed(html)
-    return snippets
+    return r.json()
 
 
 def research_topic(news: str) -> str:
-    """Multi-angle DuckDuckGo search -> extract facts for anti-hallucination gate.
+    """Multi-angle Tavily search -> extract facts for anti-hallucination gate.
 
-    Runs a few varied queries (base topic, "how it works", "review") to widen
-    coverage versus a single search, which matters most for niche topics with
-    thin web presence. Falls back gracefully if any individual query fails.
+    Runs a couple of varied queries (base topic, "explained") to widen
+    coverage versus a single search. Falls back gracefully if any
+    individual query fails.
     """
-    log("Researching topic via DuckDuckGo...")
+    log("Researching topic via Tavily...")
     keywords = extract_keywords(news)
-
     query_variants = [
         keywords,
         f"{keywords} explained",
-        f"{keywords} review",
     ]
 
     all_snippets = []
@@ -70,21 +61,21 @@ def research_topic(news: str) -> str:
 
     for query in query_variants:
         try:
-            html = _fetch_ddg(query)
-            snippets = _parse_snippets(html)
-            for s in snippets:
-                s = s[:300]  # sanitize: truncate each to limit prompt injection surface
-                if s and s not in seen:
-                    seen.add(s)
-                    all_snippets.append(s)
-            if snippets:
+            data = _fetch_tavily(query)
+            results = data.get("results", [])
+            for item in results:
+                content = item.get("content", "")
+                content = _truncate_at_sentence(content, 500)  # sanitize: limit prompt injection surface
+                if content and content not in seen:
+                    seen.add(content)
+                    all_snippets.append(content)
+            if results:
                 queries_succeeded += 1
         except Exception as e:
             log(f"  Query '{query}' failed: {e}")
             continue
 
     if all_snippets:
-        # Cap total volume so the research prompt doesn't grow unbounded
         research = "\n".join(all_snippets[:15])
         log(f"Found {len(all_snippets)} unique snippets across {queries_succeeded}/{len(query_variants)} queries.")
         return research

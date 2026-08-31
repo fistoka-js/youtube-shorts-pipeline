@@ -158,6 +158,7 @@ def cmd_produce(args):
             vo_path, work_dir,
             duck_speech=music_config.get("duck_volume_speech", 0.12),
             duck_gap=music_config.get("duck_volume_gap", 0.25),
+            words=captions_result.get("words"),
             mood_keywords=_mood_kw,
         )
         state.complete_stage("music", {
@@ -251,10 +252,26 @@ def cmd_upload(args):
 
 
 def cmd_run(args):
-    draft_path = cmd_draft(args)
     if args.dry_run:
-        print("  Dry run — skipping produce + upload")
+        from .config import PLATFORM_CONFIGS
+        from .niche import load_niche
+        print(f"\n  Dry run for topic: {args.news}")
+        platform_key = args.platform if args.platform != "all" else "shorts"
+        cfg = PLATFORM_CONFIGS.get(platform_key)
+        if not cfg:
+            print(f"  ERROR: unknown platform '{args.platform}'")
+            return
+        print(f"  Platform config OK: {cfg}")
+        try:
+            load_niche(args.niche)
+            print(f"  Niche profile '{args.niche}' loads OK")
+        except Exception as e:
+            print(f"  ERROR loading niche '{args.niche}': {e}")
+            return
+        print("  No API calls made. Everything is wired correctly.")
         return
+
+    draft_path = cmd_draft(args)
 
     class ProduceArgs:
         draft = str(draft_path)

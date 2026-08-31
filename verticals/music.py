@@ -16,14 +16,18 @@ def _find_tracks() -> list[Path]:
     return sorted(MUSIC_DIR.glob("*.mp3"))
 
 
-def _get_speech_regions(audio_path: Path) -> list[tuple[float, float]]:
-    """Extract speech regions from Whisper word timestamps (reuses captions data).
+def _get_speech_regions(audio_path: Path, words: list[dict] | None = None) -> list[tuple[float, float]]:
+    """Extract speech regions from Whisper word timestamps.
 
-    Falls back to treating the entire audio as one speech region.
+    If words is provided (already computed by the captions step), reuses it
+    instead of re-running Whisper transcription a second time on the same
+    audio. Falls back to running Whisper itself (and then to treating the
+    entire audio as one speech region) only if words wasn't provided.
     """
     try:
-        from .captions import _whisper_word_timestamps
-        words = _whisper_word_timestamps(audio_path)
+        if words is None:
+            from .captions import _whisper_word_timestamps
+            words = _whisper_word_timestamps(audio_path)
         if words:
             # Merge close words into speech regions (gap < 0.5s = same region)
             regions = []
@@ -89,6 +93,7 @@ def select_and_prepare_music(
     duck_speech: float = 0.12,
     duck_gap: float = 0.25,
     mood_keywords: list[str] | None = None,
+    words: list[dict] | None = None,
 ) -> dict:
     """Select a track matching the niche's mood keywords (falls back to random
     among top scorers, or fully random if nothing matches), build duck filter.
@@ -115,7 +120,7 @@ def select_and_prepare_music(
         log(f"Selected music track: {track.name}")
 
     # Get speech regions for ducking
-    speech_regions = _get_speech_regions(voiceover_path)
+    speech_regions = _get_speech_regions(voiceover_path, words=words)
     duck_filter = build_duck_filter(speech_regions, vol_speech=duck_speech, vol_gap=duck_gap)
     log(f"Built duck filter with {len(speech_regions)} speech regions")
 
