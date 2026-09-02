@@ -45,6 +45,35 @@ def _prepare_segment(frame: dict, out_path: Path, duration: float, effect: str) 
     return out_path
 
 
+def _compute_frame_durations(frame_count: int, words: list[dict] | None, total_duration: float) -> list[float]:
+    """Compute a duration per b-roll clip based on actual speech timing.
+
+    Splits the transcript's words into frame_count contiguous chunks by word
+    count, then uses each chunk's real start time as that clip's boundary -
+    so a clip lasts as long as the words it's meant to accompany actually
+    took to speak, instead of an even average across the whole video.
+
+    Falls back to a flat average if no word timestamps are available.
+    """
+    if not words or frame_count <= 0:
+        per_frame = total_duration / max(frame_count, 1)
+        return [per_frame] * frame_count
+
+    word_count = len(words)
+    chunk_size = word_count / frame_count
+    boundaries = []
+    for i in range(frame_count):
+        idx = min(round(i * chunk_size), word_count - 1)
+        boundaries.append(words[idx]["start"])
+    boundaries.append(total_duration)
+
+    durations = []
+    for i in range(frame_count):
+        d = boundaries[i + 1] - boundaries[i]
+        durations.append(max(d, 0.5))  # floor so no clip is near-zero length
+    return durations
+
+
 def assemble_video(
     frames: list[dict],
     voiceover: Path,
@@ -55,18 +84,21 @@ def assemble_video(
     music_path: str | None = None,
     duck_filter: str | None = None,
     title: str | None = None,
+    words: list[dict] | None = None,
 ) -> Path:
-    """Assemble final video from b-roll (video clips + image fallbacks), voiceover, captions, and music."""
+    """Assemble final video from b-roll (video clips + image fallbacks),
+voiceover, captions, and music."""
     log("Assembling video...")
     duration = get_audio_duration(voiceover)
-    per_frame = duration / len(frames)
+    frame_durations = _compute_frame_durations(len(frames), words, duration)
     effects = ["zoom_in", "pan_right", "zoom_out"]
 
-    # Prepare each b-roll item as a fixed-duration segment
+    # Prepare each b-roll item as a segment sized to match the actual speech
+    # it accompanies (falls back to an even split if no word timing is available)
     segments = []
     for i, frame in enumerate(frames):
         seg = out_dir / f"seg_{i}.mp4"
-        _prepare_segment(frame, seg, per_frame + 0.1, effects[i % len(effects)])
+        _prepare_segment(frame, seg, frame_durations[i] + 0.1, effects[i % len(effects)])
         segments.append(seg)
 
     # Concat segments (escape single quotes for ffmpeg concat demuxer)

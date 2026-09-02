@@ -61,7 +61,6 @@ def cmd_draft(args):
     print(f"\n  B-roll prompts:")
     for i, p in enumerate(draft.get("broll_prompts", [])):
         print(f"  {i+1}. {p}")
-
     return out_path
 
 
@@ -100,7 +99,11 @@ def cmd_produce(args):
 
     # B-roll
     if force or not state.is_done("broll"):
-        frames = generate_broll(draft.get("broll_prompts", ["Cinematic landscape"] * 12), work_dir)
+        frames = generate_broll(
+            draft.get("broll_prompts", ["Cinematic landscape"] * 12), work_dir,
+            topic_context=f"{draft.get('news', '')} {draft.get('niche', '')}",
+            broll_subject=draft.get("broll_subject", ""),
+        )
         state.complete_stage("broll", {
             "frames": [{"path": str(f["path"]), "type": f["type"]} for f in frames]
         })
@@ -184,6 +187,7 @@ def cmd_produce(args):
             ass_path=captions_result.get("ass_path"),
             music_path=music_result.get("track_path"),
             duck_filter=music_result.get("duck_filter"),
+            words=captions_result.get("words"),
         )
         state.complete_stage("assemble", {"video_path": str(video_path)})
     else:
