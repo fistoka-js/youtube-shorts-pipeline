@@ -279,6 +279,12 @@ STRUCTURE RULES:
 - Anti-hallucination: only use names, facts, figures found in research above
 
 B-ROLL RULES:
+- Each section gets its own broll_subject: the literal main visual subject
+  for THAT section specifically (1-2 words, e.g. "octopus", "evolutionary
+  diagram", "research laboratory"). Sections about the main topic's subject
+  should share the same broll_subject; sections that shift focus (context,
+  science background, broader implications) should have their own accurate
+  broll_subject rather than defaulting to the main one.
 - Each section gets its own broll_prompts list: roughly 1 prompt per 15-20
   seconds of that section's narration (a ~150-word section is about 3-4 prompts)
 - B-roll prompts are used as STOCK FOOTAGE SEARCH QUERIES, not cinematographer
@@ -305,6 +311,7 @@ Output JSON exactly:
       "id": "s1",
       "heading": "short chapter title, 2-5 words",
       "narration": "the actual spoken script text for this section",
+      "broll_subject": "main visual subject for this section, 1-2 words",
       "broll_prompts": ["prompt 1", "prompt 2"]
     }}
   ],
@@ -344,6 +351,7 @@ Output JSON exactly:
     if not isinstance(sections, list) or not sections:
         raise ValueError("LLM returned no sections - cannot build long-form draft")
 
+    top_level_subject = str(draft.get("broll_subject", "")).strip()
     clean_sections = []
     for i, sec in enumerate(sections):
         sid = str(sec.get("id", f"s{i+1}"))
@@ -351,6 +359,9 @@ Output JSON exactly:
         narration = str(sec.get("narration", "")).strip()
         if not narration:
             continue
+        # Fall back to the top-level subject if this section didn't get
+        # its own (keeps old drafts / malformed LLM output working).
+        section_subject = str(sec.get("broll_subject", "")).strip() or top_level_subject
         prompts = sec.get("broll_prompts", [])
         if not isinstance(prompts, list):
             prompts = ["Cinematic landscape"]
@@ -358,7 +369,8 @@ Output JSON exactly:
         if suffix:
             prompts = [f"{p}. {suffix}" for p in prompts]
         clean_sections.append({
-            "id": sid, "heading": heading, "narration": narration, "broll_prompts": prompts,
+            "id": sid, "heading": heading, "narration": narration,
+            "broll_subject": section_subject, "broll_prompts": prompts,
         })
     if not clean_sections:
         raise ValueError("All sections were empty after validation - cannot build long-form draft")
