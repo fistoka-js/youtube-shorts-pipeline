@@ -59,9 +59,8 @@ def generate_draft(
             vis_parts.append(f"Preferred subjects: {', '.join(subjects['prefer'][:5])}")
         if subjects.get("avoid"):
             vis_parts.append(f"Avoid: {', '.join(subjects['avoid'][:3])}")
-        suffix = visual_context.get("prompt_suffix", "")
-        if suffix:
-            vis_parts.append(f"Append to every b-roll prompt: {suffix}")
+        # prompt_suffix is appended in code after Claude returns (not in
+        # the prompt itself) to avoid the duplicate-suffix bug.
         if vis_parts:
             visual_guidance = "\nB-ROLL VISUAL GUIDANCE:\n" + "\n".join(vis_parts)
 
@@ -217,9 +216,8 @@ def generate_long_form_draft(
             vis_parts.append(f"Preferred subjects: {', '.join(subjects['prefer'][:5])}")
         if subjects.get("avoid"):
             vis_parts.append(f"Avoid: {', '.join(subjects['avoid'][:3])}")
-        suffix = visual_context.get("prompt_suffix", "")
-        if suffix:
-            vis_parts.append(f"Append to every b-roll prompt: {suffix}")
+        # prompt_suffix is appended in code after Claude returns (not in
+        # the prompt itself) to avoid the duplicate-suffix bug.
         if vis_parts:
             visual_guidance = "\nB-ROLL VISUAL GUIDANCE:\n" + "\n".join(vis_parts)
 
