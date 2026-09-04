@@ -41,7 +41,7 @@ def upload_to_youtube(
             "title": draft.get("youtube_title", draft["news"])[:100],
             "description": draft.get("youtube_description", ""),
             "tags": draft.get("youtube_tags", "").split(","),
-            "categoryId": "20",
+            "categoryId": "28",  # Science & Technology
             "defaultLanguage": lang,
             "defaultAudioLanguage": lang,
         },
