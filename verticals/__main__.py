@@ -616,7 +616,7 @@ def main():
     p_run = sub.add_parser("run", help="Full pipeline: draft -> produce -> upload")
     p_run.add_argument("--topic", "--news", dest="news", required=False, help="Topic/news headline")
     p_run.add_argument("--niche", default="general", help=niche_help)
-    p_run.add_argument("--platform", default="shorts", choices=["shorts", "reels", "tiktok", "all"])
+    p_run.add_argument("--platform", default="shorts", choices=["shorts", "reels", "tiktok", "all", "long_form"])
     p_run.add_argument("--provider", default=None, help="LLM: claude, gemini, openai, ollama")
     p_run.add_argument("--voice", default=None, help="TTS: edge, elevenlabs, 60db, say")
     p_run.add_argument("--lang", default="en", choices=["en", "hi", "es", "pt", "de", "fr", "ja", "ko"])
