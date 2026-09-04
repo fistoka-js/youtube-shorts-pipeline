@@ -26,24 +26,32 @@ def get_audio_duration(path: Path) -> float:
     return float(r.stdout.strip())
 
 
-def _prepare_segment(frame: dict, out_path: Path, duration: float, effect: str) -> Path:
+def _prepare_segment(frame: dict, out_path: Path, duration: float, effect: str,
+                     width: int = VIDEO_WIDTH, height: int = VIDEO_HEIGHT) -> Path:
     """Turn one b-roll item (video clip or still image) into a fixed-duration
-    portrait segment, ready for concatenation."""
+    segment at the target dimensions, ready for concatenation.
+
+    Video clips are downloaded at a fixed short duration (see broll.py's
+    clip_duration), but the actual duration needed here is computed from
+    real speech timing and can be much longer (especially for long-form,
+    where ~50 clips share ~10 minutes of narration). -stream_loop makes the
+    source clip repeat as many times as needed to fill the requested
+    duration, instead of silently truncating to whatever's on disk.
+    """
     if frame.get("type") == "video":
         src = frame["path"]
         vf = (
-            f"scale={VIDEO_WIDTH}:{VIDEO_HEIGHT}:force_original_aspect_ratio=increase,"
-            f"crop={VIDEO_WIDTH}:{VIDEO_HEIGHT}"
+            f"scale={width}:{height}:force_original_aspect_ratio=increase,"
+            f"crop={width}:{height}"
         )
         run_cmd([
-            "ffmpeg", "-i", str(src), "-t", str(duration),
+            "ffmpeg", "-stream_loop", "-1", "-i", str(src), "-t", str(duration),
             "-vf", vf, "-an", "-r", "30", "-pix_fmt", "yuv420p",
             str(out_path), "-y", "-loglevel", "quiet",
         ])
     else:
-        animate_frame(frame["path"], out_path, duration, effect)
+        animate_frame(frame["path"], out_path, duration, effect, width, height)
     return out_path
-
 
 def _compute_frame_durations(frame_count: int, words: list[dict] | None, total_duration: float) -> list[float]:
     """Compute a duration per b-roll clip based on actual speech timing.
@@ -85,9 +93,12 @@ def assemble_video(
     duck_filter: str | None = None,
     title: str | None = None,
     words: list[dict] | None = None,
+    width: int = VIDEO_WIDTH,
+    height: int = VIDEO_HEIGHT,
 ) -> Path:
     """Assemble final video from b-roll (video clips + image fallbacks),
-voiceover, captions, and music."""
+voiceover, captions, and music. Defaults to portrait (Shorts); pass
+width/height=1920/1080 for landscape long-form output."""
     log("Assembling video...")
     duration = get_audio_duration(voiceover)
     frame_durations = _compute_frame_durations(len(frames), words, duration)
@@ -98,7 +109,7 @@ voiceover, captions, and music."""
     segments = []
     for i, frame in enumerate(frames):
         seg = out_dir / f"seg_{i}.mp4"
-        _prepare_segment(frame, seg, frame_durations[i] + 0.1, effects[i % len(effects)])
+        _prepare_segment(frame, seg, frame_durations[i] + 0.1, effects[i % len(effects)], width, height)
         segments.append(seg)
 
     # Concat segments (escape single quotes for ffmpeg concat demuxer)

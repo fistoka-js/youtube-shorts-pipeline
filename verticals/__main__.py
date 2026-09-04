@@ -28,7 +28,7 @@ def maybe_run_setup(args):
 
 
 def cmd_draft(args):
-    from .draft import generate_draft
+    from .draft import generate_draft, generate_long_form_draft
     from .state import PipelineState
     import json
 
@@ -40,13 +40,22 @@ def cmd_draft(args):
     provider = getattr(args, "provider", None)
 
     print(f"\n  Drafting: {args.news} [niche: {niche}, platform: {platform}]\n")
-    draft = generate_draft(
-        args.news,
-        getattr(args, "context", ""),
-        niche=niche,
-        platform=platform,
-        provider=provider,
-    )
+
+    if platform == "long_form":
+        draft = generate_long_form_draft(
+            args.news,
+            getattr(args, "context", ""),
+            niche=niche,
+            provider=provider,
+        )
+    else:
+        draft = generate_draft(
+            args.news,
+            getattr(args, "context", ""),
+            niche=niche,
+            platform=platform,
+            provider=provider,
+        )
     draft["job_id"] = job_id
 
     out_path = DRAFTS_DIR / f"{job_id}.json"
@@ -56,11 +65,28 @@ def cmd_draft(args):
     state.save(out_path)
 
     print(f"\n  Draft saved: {out_path}")
-    print(f"\n  Script:\n{draft['script']}")
     print(f"\n  Title: {draft.get('youtube_title', '')}")
-    print(f"\n  B-roll prompts:")
-    for i, p in enumerate(draft.get("broll_prompts", [])):
-        print(f"  {i+1}. {p}")
+
+    if platform == "long_form":
+        sections = draft.get("sections", [])
+        print(f"\n  Total words: {draft.get('total_words', 0)} across {len(sections)} sections\n")
+        for sec in sections:
+            print(f"  [{sec['id']}] {sec['heading']}")
+            print(f"  {sec['narration']}\n")
+            for i, p in enumerate(sec.get("broll_prompts", [])):
+                print(f"    b-roll {i+1}. {p}")
+            print()
+        cutpoints = draft.get("shorts_cutpoints", [])
+        if cutpoints:
+            print(f"  Shorts cutpoints:")
+            for cp in cutpoints:
+                print(f"    {cp['section_ids']}: {cp['reason']}")
+    else:
+        print(f"\n  Script:\n{draft['script']}")
+        print(f"\n  B-roll prompts:")
+        for i, p in enumerate(draft.get("broll_prompts", [])):
+            print(f"  {i+1}. {p}")
+
     return out_path
 
 
@@ -77,6 +103,10 @@ def cmd_produce(args):
 
     draft_path = Path(args.draft)
     draft = json.loads(draft_path.read_text())
+
+    if draft.get("platform") == "long_form":
+        return cmd_produce_long_form(args)
+
     job_id = draft["job_id"]
     lang = args.lang
     state = PipelineState(draft)
@@ -207,6 +237,161 @@ def cmd_produce(args):
     print(f"\n  Video: {video_path}")
     return video_path
 
+def cmd_produce_long_form(args):
+    from .broll import generate_broll_long_form
+    from .tts import generate_voiceover
+    from .captions import generate_captions
+    from .music import select_and_prepare_music
+    from .assemble import assemble_video
+    from .niche import load_niche, get_voice_config, get_caption_config, get_music_config
+    from .state import PipelineState
+    import json
+    import shutil
+
+    draft_path = Path(args.draft)
+    draft = json.loads(draft_path.read_text())
+    job_id = draft["job_id"]
+    lang = args.lang
+    state = PipelineState(draft)
+
+    niche_name = draft.get("niche", "general")
+    profile = load_niche(niche_name)
+    sections = draft["sections"]
+
+    MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+    work_dir = MEDIA_DIR / f"work_{job_id}_{lang}"
+    work_dir.mkdir(exist_ok=True)
+
+    force = getattr(args, "force", False)
+    tts_provider = getattr(args, "voice", None)
+
+    # Concatenate all section narration into one script for TTS - the
+    # existing TTS/captions/assemble stages are section-agnostic, they
+    # just need one continuous script and audio file.
+    full_script = "\n\n".join(sec["narration"] for sec in sections)
+
+    print(f"\n  Producing LONG-FORM {lang.upper()} video for job {job_id} [niche: {niche_name}]")
+    print(f"  {len(sections)} sections, {draft.get('total_words', 0)} words")
+
+    from .config import PLATFORM_CONFIGS
+    lf_cfg = PLATFORM_CONFIGS["long_form"]
+    lf_width, lf_height = lf_cfg["width"], lf_cfg["height"]
+
+    # Voiceover FIRST (before b-roll) - real speech timing from Whisper is
+    # what lets b-roll download clips at their actual needed duration
+    # instead of guessing from word-count ratios, which was still causing
+    # visible looping on ~40% of clips even with per-section estimates.
+    if force or not state.is_done("voiceover"):
+        voice_config = get_voice_config(profile, provider=tts_provider or "edge_tts", lang=lang)
+        vo_path = generate_voiceover(
+            full_script, work_dir, lang,
+            provider=tts_provider,
+            voice_config=voice_config,
+        )
+        state.complete_stage("voiceover", {"path": str(vo_path)})
+    else:
+        log("Skipping voiceover (already done)")
+        vo_path = Path(state.get_artifact("voiceover", "path"))
+
+    # Captions (also gives us real word timestamps for b-roll durations)
+    caption_config = get_caption_config(profile)
+    if force or not state.is_done("captions"):
+        captions_result = generate_captions(
+            vo_path, work_dir, lang,
+            highlight_color=caption_config.get("highlight_color", "#FFFF00"),
+            words_per_group=caption_config.get("words_per_group", 4),
+            font_family=caption_config.get("font_family", "Arial"),
+            font_size=int(caption_config.get("font_size", 72)),
+            script_text=full_script,
+        )
+        state.complete_stage("captions", {
+            "srt_path": str(captions_result.get("srt_path", "")),
+            "ass_path": str(captions_result.get("ass_path", "")),
+            "words": captions_result.get("words"),
+        })
+    else:
+        log("Skipping captions (already done)")
+        captions_result = {
+            "srt_path": state.get_artifact("captions", "srt_path", ""),
+            "ass_path": state.get_artifact("captions", "ass_path", ""),
+            "words": state.get_artifact("captions", "words", None),
+        }
+
+    # B-roll (per-section pools), landscape dimensions for long-form.
+    # Uses REAL Whisper word timestamps to compute exact per-clip durations
+    # (each section's real narration span / its own prompt count), so
+    # downloaded clips match what they'll actually need instead of an
+    # estimate - eliminates most of the internal looping seen before.
+    if force or not state.is_done("broll"):
+        frames = generate_broll_long_form(
+            sections, work_dir,
+            topic_context=f"{draft.get('news', '')} {draft.get('niche', '')}",
+            width=lf_width, height=lf_height,
+            words=captions_result.get("words"),
+        )
+        state.complete_stage("broll", {
+            "frames": [{"path": str(f["path"]), "type": f["type"], "section_id": f["section_id"]} for f in frames]
+        })
+    else:
+        log("Skipping b-roll (already done)")
+        raw = state.get_artifact("broll", "frames", [])
+        frames = [{"path": Path(f["path"]), "type": f["type"], "section_id": f.get("section_id", "")} for f in raw]
+
+    # Music
+    music_config = get_music_config(profile)
+    if force or not state.is_done("music"):
+        _mood_str = music_config.get("mood", "")
+        _mood_kw = [w.strip() for w in _mood_str.replace(",", " ").split() if w.strip()]
+        _mood_kw += [str(t).strip() for t in music_config.get("tags", [])]
+        music_result = select_and_prepare_music(
+            vo_path, work_dir,
+            duck_speech=music_config.get("duck_volume_speech", 0.12),
+            duck_gap=music_config.get("duck_volume_gap", 0.25),
+            words=captions_result.get("words"),
+            mood_keywords=_mood_kw,
+        )
+        state.complete_stage("music", {
+            "track_path": str(music_result.get("track_path", "")),
+            "duck_filter": music_result.get("duck_filter", ""),
+        })
+    else:
+        log("Skipping music (already done)")
+        music_result = {
+            "track_path": state.get_artifact("music", "track_path", ""),
+            "duck_filter": state.get_artifact("music", "duck_filter", ""),
+        }
+
+    # Assemble (landscape dimensions for long-form)
+    if force or not state.is_done("assemble"):
+        video_path = assemble_video(
+            frames=frames,
+            voiceover=vo_path,
+            title=draft.get("youtube_title", "long_form_video"),
+            out_dir=work_dir,
+            job_id=job_id,
+            lang=lang,
+            ass_path=captions_result.get("ass_path"),
+            music_path=music_result.get("track_path"),
+            duck_filter=music_result.get("duck_filter"),
+            words=captions_result.get("words"),
+            width=lf_width, height=lf_height,
+        )
+        state.complete_stage("assemble", {"video_path": str(video_path)})
+    else:
+        log("Skipping assembly (already done)")
+        video_path = Path(state.get_artifact("assemble", "video_path"))
+
+    srt_path = captions_result.get("srt_path")
+    if srt_path and Path(srt_path).exists():
+        final_srt = MEDIA_DIR / f"verticals_{job_id}_{lang}.srt"
+        shutil.copy(srt_path, final_srt)
+        draft[f"srt_{lang}"] = str(final_srt)
+
+    draft[f"video_{lang}"] = str(video_path)
+    state.save(draft_path)
+
+    print(f"\n  Video: {video_path}")
+    return video_path
 
 def cmd_upload(args):
     from .upload import upload_to_youtube
@@ -407,7 +592,7 @@ def main():
     p_draft.add_argument("--topic", "--news", dest="news", required=False, help="Topic/news headline")
     p_draft.add_argument("--context", default="", help="Channel context")
     p_draft.add_argument("--niche", default="general", help=niche_help)
-    p_draft.add_argument("--platform", default="shorts", choices=["shorts", "reels", "tiktok", "all"])
+    p_draft.add_argument("--platform", default="shorts", choices=["shorts", "reels", "tiktok", "all", "long_form"])
     p_draft.add_argument("--provider", default=None, help="LLM: claude, gemini, openai, ollama")
     p_draft.add_argument("--discover", action="store_true", help="Use topic engine")
     p_draft.add_argument("--auto-pick", action="store_true", help="Let LLM pick the best topic")

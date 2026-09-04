@@ -66,7 +66,8 @@ def _embed_texts_ensembled(model, tokenizer, class_prompt_lists):
 
 # ── Pool: search once, verify once, match per-prompt ─────────────────────
 
-def _build_subject_pool(subject: str, api_key: str, topic_context: str = "") -> list:
+def _build_subject_pool(subject: str, api_key: str, topic_context: str = "",
+                        orientation: str | None = None) -> list:
     """Search Pexels ONCE for the main subject, fetch 50 candidates,
     CLIP-verify each against food/toy/illustration negatives, and return
     confirmed-correct ones with pre-computed image embeddings."""
@@ -77,9 +78,12 @@ def _build_subject_pool(subject: str, api_key: str, topic_context: str = "") -> 
         return []
 
     log(f"Building subject pool: searching Pexels for \"{subject}\" (50 candidates)...")
+    params = {"query": subject, "per_page": 50, "size": "medium"}
+    if orientation:
+        params["orientation"] = orientation
     r = requests.get(
         "https://api.pexels.com/videos/search",
-        params={"query": subject, "per_page": 50, "size": "medium"},
+        params=params,
         headers={"Authorization": api_key},
         timeout=30,
     )
@@ -153,9 +157,17 @@ def _build_subject_pool(subject: str, api_key: str, topic_context: str = "") -> 
     return verified
 
 
-def _best_pool_match(prompt_text: str, pool: list, used_ids: set) -> dict | None:
+def _best_pool_match(prompt_text: str, pool: list, used_ids: set,
+                     min_duration: float = 0.0) -> dict | None:
     """Pick the best-matching clip from the verified pool for a prompt,
-    using CLIP text-to-image similarity. Excludes already-used clips."""
+    using CLIP text-to-image similarity. Excludes already-used clips.
+
+    When min_duration is given, prefers clips that are actually long enough
+    to cover the segment without looping - among candidates within the top
+    similarity tier, picks the longest rather than picking on pure
+    similarity alone (which frequently chose a great-match-but-too-short
+    clip over a slightly-less-perfect-but-long-enough one).
+    """
     import torch
     available = [p for p in pool if p["video"].get("id") not in used_ids]
     if not available:
@@ -165,13 +177,32 @@ def _best_pool_match(prompt_text: str, pool: list, used_ids: set) -> dict | None
     with torch.no_grad():
         text_feat = model.encode_text(text_input)
         text_feat /= text_feat.norm(dim=-1, keepdim=True)
-    best_score, best_entry = -1.0, None
+
+    scored = []
     for entry in available:
         score = (text_feat @ entry["image_embedding"].unsqueeze(1)).item()
-        if score > best_score:
-            best_score, best_entry = score, entry
-    return best_entry
+        scored.append((score, entry))
+    scored.sort(key=lambda x: x[0], reverse=True)
 
+    if min_duration > 0:
+        # Consider the top 40% of candidates by similarity (a reasonable
+        # relevance floor), then among those, prefer the longest clip -
+        # trimming down a longer clip looks far better than looping a
+        # short one, and Pexels rarely returns an exact-length match.
+        top_n = max(1, int(len(scored) * 0.4))
+        top_candidates = scored[:top_n]
+        best_entry = max(
+            top_candidates,
+            key=lambda x: _pexels_video_duration(x[1]["video"]),
+        )[1]
+        return best_entry
+
+    return scored[0][1] if scored else None
+
+
+def _pexels_video_duration(video: dict) -> float:
+    """Pexels video metadata includes a top-level duration in seconds."""
+    return float(video.get("duration", 0) or 0)
 
 # ── Individual search (last resort when pool is empty/exhausted) ─────────
 
@@ -228,8 +259,11 @@ def _search_pexels_video(
 
 # ── Download / fallback helpers ──────────────────────────────────────────
 
-def _download_and_crop_video(url: str, out_path: Path, duration: float) -> Path:
-    """Download a Pexels clip and crop/scale/trim to exact portrait dimensions."""
+def _download_and_crop_video(url: str, out_path: Path, duration: float,
+                              width: int = VIDEO_WIDTH, height: int = VIDEO_HEIGHT) -> Path:
+    """Download a Pexels clip and crop/scale/trim to the target dimensions
+    (portrait for Shorts by default, landscape for long-form when width/
+    height are passed explicitly)."""
     tmp_path = out_path.with_suffix(".raw.mp4")
     r = requests.get(url, timeout=90, stream=True)
     r.raise_for_status()
@@ -237,8 +271,8 @@ def _download_and_crop_video(url: str, out_path: Path, duration: float) -> Path:
         for chunk in r.iter_content(chunk_size=1 << 16):
             f.write(chunk)
     vf = (
-        f"scale={VIDEO_WIDTH}:{VIDEO_HEIGHT}:force_original_aspect_ratio=increase,"
-        f"crop={VIDEO_WIDTH}:{VIDEO_HEIGHT}"
+        f"scale={width}:{height}:force_original_aspect_ratio=increase,"
+        f"crop={width}:{height}"
     )
     run_cmd([
         "ffmpeg", "-i", str(tmp_path), "-t", str(duration),
@@ -357,12 +391,137 @@ def generate_broll(prompts: list, out_dir: Path, clip_duration: float = 4.0,
 
     return frames
 
+def generate_broll_long_form(sections: list, out_dir: Path,
+                             topic_context: str = "",
+                             width: int = VIDEO_WIDTH, height: int = VIDEO_HEIGHT,
+                             orientation: str | None = "landscape",
+                             words: list[dict] | None = None) -> list[dict]:
+    """Pool-first b-roll for long-form videos with multiple sections, each
+    potentially having a different visual subject (e.g. "octopus" for most
+    sections, "medical research" for a science-context section).
 
-def animate_frame(img_path: Path, out_path: Path, duration: float, effect: str = "zoom_in"):
+    Builds ONE verified pool per unique subject across the whole video
+    (not per section) to avoid redundant Pexels searches when consecutive
+    sections share a subject, then matches each section's own prompts
+    against its own subject's pool.
+
+    Returns a list of dicts: {"path": Path, "type": "video" | "image",
+    "section_id": str} — section_id lets assembly know which narration
+    chunk each clip belongs to.
+    """
+    import time
+
+    pexels_key = get_pexels_key()
+
+    # Collect unique subjects across all sections, build one pool each.
+    unique_subjects = []
+    seen = set()
+    for sec in sections:
+        subj = (sec.get("broll_subject") or "").strip()
+        if subj and subj.lower() not in seen:
+            seen.add(subj.lower())
+            unique_subjects.append(subj)
+
+    pools_by_subject = {}
+    if pexels_key:
+        for subj in unique_subjects:
+            pools_by_subject[subj.lower()] = _build_subject_pool(subj, pexels_key, topic_context, orientation)
+
+    frames = []
+    used_video_ids = set()  # global across the whole video, not per-pool
+
+    # Map each section to its real speech span using Whisper word timestamps:
+    # walk through the concatenated narration in the same order sections
+    # were joined (cmd_produce_long_form joins them with "\n\n"), matching
+    # word counts to timestamp indices. This gives each section's ACTUAL
+    # start/end time in the final audio, not an estimate from word count.
+    section_spans = {}  # sec_id -> (start_time, end_time)
+    if words:
+        word_idx = 0
+        for sec in sections:
+            sec_word_count = len(sec.get("narration", "").split())
+            start_idx = min(word_idx, len(words) - 1)
+            end_idx = min(word_idx + sec_word_count - 1, len(words) - 1)
+            if sec_word_count > 0 and start_idx < len(words):
+                start_time = words[start_idx]["start"]
+                end_time = words[end_idx]["end"] if end_idx < len(words) else words[-1]["end"]
+                section_spans[sec.get("id", "")] = (start_time, end_time)
+            word_idx += sec_word_count
+
+    for sec in sections:
+        sec_id = sec.get("id", "")
+        subject = (sec.get("broll_subject") or "").strip()
+        prompts = sec.get("broll_prompts", [])
+        pool = pools_by_subject.get(subject.lower(), [])
+
+        # Real per-clip duration: this section's ACTUAL speech duration
+        # (from Whisper timestamps) divided across its own prompt count.
+        # Falls back to a flat estimate only if word timestamps weren't
+        # available (e.g. captions stage was skipped for some reason).
+        if sec_id in section_spans and prompts:
+            span_start, span_end = section_spans[sec_id]
+            sec_seconds = max(span_end - span_start, 1.0)
+            clip_duration = max(4.0, min(25.0, sec_seconds / len(prompts)))
+        else:
+            clip_duration = 8.0  # sane fallback if word timing is missing
+
+        for i, prompt in enumerate(prompts):
+            prompt = str(prompt).strip()
+            log(f"Sourcing b-roll for {sec_id} ({i+1}/{len(prompts)})...")
+            got_video = False
+
+            if pool and not got_video:
+                match = _best_pool_match(prompt, pool, used_video_ids, min_duration=clip_duration)
+                if match:
+                    video = match["video"]
+                    link = _best_file_link(video)
+                    if link:
+                        vid_id = video.get("id")
+                        if vid_id is not None:
+                            used_video_ids.add(vid_id)
+                        out_path = out_dir / f"broll_{sec_id}_{i}.mp4"
+                        _download_and_crop_video(link, out_path, clip_duration, width, height)
+                        frames.append({"path": out_path, "type": "video", "section_id": sec_id})
+                        got_video = True
+                        log(f"  Matched from pool: \"{prompt[:60]}\"")
+
+            if not got_video and pexels_key:
+                try:
+                    url, vid_id = _search_pexels_video(
+                        prompt.split(".")[0].strip(), pexels_key,
+                        exclude_ids=used_video_ids, fallback_query=subject,
+                        topic_context=topic_context,
+                    )
+                    if url:
+                        if vid_id is not None:
+                            used_video_ids.add(vid_id)
+                        out_path = out_dir / f"broll_{sec_id}_{i}.mp4"
+                        _download_and_crop_video(url, out_path, clip_duration, width, height)
+                        frames.append({"path": out_path, "type": "video", "section_id": sec_id})
+                        got_video = True
+                        log(f"  Found via individual search: \"{prompt[:60]}\"")
+                except Exception as e:
+                    log(f"  Individual search failed: {e}")
+
+            if not got_video:
+                try:
+                    out_path = out_dir / f"broll_{sec_id}_{i}.png"
+                    _generate_pollinations_image(prompt, out_path)
+                    frames.append({"path": out_path, "type": "image", "section_id": sec_id})
+                    log(f"  No stock match \u2014 generated fallback image")
+                    time.sleep(1.0)
+                except Exception as e:
+                    log(f"  Fallback image failed: {e} \u2014 using solid color")
+                    frames.append({"path": _fallback_frame(len(frames), out_dir), "type": "image", "section_id": sec_id})
+
+    return frames
+
+def animate_frame(img_path: Path, out_path: Path, duration: float, effect: str = "zoom_in",
+                  width: int = VIDEO_WIDTH, height: int = VIDEO_HEIGHT):
     """Ken Burns animation on a still frame (used for image fallbacks)."""
     fps = 30
     n = int(duration * fps)
-    w, h = VIDEO_WIDTH, VIDEO_HEIGHT
+    w, h = width, height
     if effect == "zoom_in":
         vf = (f"scale={int(w*1.12)}:{int(h*1.12)},"
               f"zoompan=z='1.12-0.12*on/{n}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
