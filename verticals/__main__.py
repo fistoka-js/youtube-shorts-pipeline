@@ -317,6 +317,40 @@ def cmd_produce_long_form(args):
             "words": state.get_artifact("captions", "words", None),
         }
 
+    # Compute YouTube chapter markers from each section's real start time
+    # in the audio (via Whisper word timestamps) - same word-count-walk
+    # technique used in broll.py's section_spans. YouTube requires: first
+    # chapter at 0:00, at least 3 chapters, each >=10s apart, ascending.
+    words = captions_result.get("words")
+    chapters = []
+    if words:
+        word_idx = 0
+        for sec in sections:
+            sec_word_count = len(sec.get("narration", "").split())
+            start_idx = min(word_idx, len(words) - 1)
+            if sec_word_count > 0 and start_idx < len(words):
+                start_time = words[start_idx]["start"]
+                chapters.append({
+                    "heading": sec.get("heading", sec.get("id", "")),
+                    "start_seconds": start_time,
+                })
+            word_idx += sec_word_count
+
+        # First chapter must start at 0:00 exactly (YouTube requirement).
+        if chapters:
+            chapters[0]["start_seconds"] = 0.0
+
+        # Enforce the >=10s-apart rule: drop chapters too close to the
+        # previous kept one rather than let YouTube silently reject all
+        # of them for one bad gap.
+        filtered = []
+        for ch in chapters:
+            if not filtered or ch["start_seconds"] - filtered[-1]["start_seconds"] >= 10.0:
+                filtered.append(ch)
+        chapters = filtered if len(filtered) >= 3 else []  # need 3+ or YouTube ignores them
+
+    draft["chapters"] = chapters
+
     # B-roll (per-section pools), landscape dimensions for long-form.
     # Uses REAL Whisper word timestamps to compute exact per-clip durations
     # (each section's real narration span / its own prompt count), so

@@ -36,10 +36,27 @@ def upload_to_youtube(
     youtube = build("youtube", "v3", credentials=creds)
     log(f"Uploading {video_path.name}...")
 
+    description = draft.get("youtube_description", "")
+
+    # Append YouTube chapter markers if present (long-form only) - YouTube
+    # auto-detects these from timestamp lines in the description as long
+    # as the first is 0:00 and there are 3+, each >=10s apart (already
+    # enforced when chapters were computed).
+    chapters = draft.get("chapters") or []
+    if chapters:
+        chapter_lines = []
+        for ch in chapters:
+            total_seconds = int(ch["start_seconds"])
+            h, rem = divmod(total_seconds, 3600)
+            m, s = divmod(rem, 60)
+            timestamp = f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+            chapter_lines.append(f"{timestamp} {ch['heading']}")
+        description = description.rstrip() + "\n\n" + "\n".join(chapter_lines)
+
     body = {
         "snippet": {
             "title": draft.get("youtube_title", draft["news"])[:100],
-            "description": draft.get("youtube_description", ""),
+            "description": description,
             "tags": draft.get("youtube_tags", "").split(","),
             "categoryId": "28",  # Science & Technology
             "defaultLanguage": lang,
