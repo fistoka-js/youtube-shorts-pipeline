@@ -295,9 +295,21 @@ B-ROLL RULES:
   for negative beats (e.g. a vet's office, not the injury itself)
 
 SHORTS_CUTPOINTS:
-- After writing all sections, identify 1-2 candidate spans of 2-4 consecutive
-  sections that could stand alone as a 45-60s Short with its own complete
-  hook-payoff arc (for later extraction) - reference them by section id
+- After writing all sections, identify 1-2 candidate spans that could stand
+  alone as a 45-60s Short with its own complete hook-payoff arc.
+- CRITICAL DURATION MATH: spoken narration runs at roughly 150 words per
+  minute, so a 45-60s Short can only fit about 110-150 words TOTAL across
+  all sections in the span. Since each section is 130-200 words on its own,
+  a usable span is almost always exactly ONE section, and only very rarely
+  two consecutive sections if both are on the short end (~110-130 words
+  each is already too long combined - two 130-word sections is 260 words,
+  which is 100+ seconds, NOT a Short).
+- Before finalizing a cutpoint, add up the actual word counts of the
+  sections in the span and confirm the total is under 150 words. If no
+  single section or two-section combination fits under 150 words, pick
+  the single section that comes closest to a complete, satisfying
+  standalone arc on its own rather than forcing multiple sections together.
+- Reference the span by section id
 
 Output JSON exactly:
 {{

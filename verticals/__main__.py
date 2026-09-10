@@ -427,6 +427,42 @@ def cmd_produce_long_form(args):
     print(f"\n  Video: {video_path}")
     return video_path
 
+def cmd_extract_shorts(args):
+    from .shorts_extract import extract_shorts_from_cutpoints
+    import json
+
+    draft_path = Path(args.draft)
+    draft = json.loads(draft_path.read_text())
+
+def cmd_extract_shorts(args):
+    from .shorts_extract import extract_shorts_from_cutpoints
+    import json
+
+    draft_path = Path(args.draft)
+    draft = json.loads(draft_path.read_text())
+
+    if draft.get("platform") != "long_form":
+        print("  Error: --draft must point to a long_form draft (shorts_cutpoints only exist there)")
+        sys.exit(1)
+
+    video_path = Path(draft.get("video_en", ""))
+    if not video_path.exists():
+        print(f"  No produced video found at {video_path}. Run produce first.")
+        sys.exit(1)
+
+    out_dir = MEDIA_DIR
+    results = extract_shorts_from_cutpoints(draft, video_path, out_dir)
+
+    if not results:
+        print("  No Shorts extracted (see log above for why).")
+        return
+
+    print(f"\n  Extracted {len(results)} Short(s):")
+    for r in results:
+        print(f"  {r['path']}")
+        print(f"    sections: {r['section_ids']}")
+        print(f"    reason: {r['reason']}")
+
 def cmd_upload(args):
     from .upload import upload_to_youtube
     from .thumbnail import generate_thumbnail
@@ -646,6 +682,10 @@ def main():
     p_upload.add_argument("--lang", default="en", choices=["en", "hi", "es", "pt", "de", "fr", "ja", "ko"])
     p_upload.add_argument("--force", action="store_true", help="Re-upload even if done")
 
+    # extract-shorts (long-form only)
+    p_extract = sub.add_parser("extract-shorts", help="Extract companion Shorts from a produced long-form video")
+    p_extract.add_argument("--draft", required=True)
+
     # run (full pipeline)
     p_run = sub.add_parser("run", help="Full pipeline: draft -> produce -> upload")
     p_run.add_argument("--topic", "--news", dest="news", required=False, help="Topic/news headline")
@@ -722,6 +762,8 @@ def main():
         cmd_produce(args)
     elif args.cmd == "upload":
         cmd_upload(args)
+    elif args.cmd == "extract-shorts":
+        cmd_extract_shorts(args)
     elif args.cmd == "run":
         cmd_run(args)
     elif args.cmd == "topics":
