@@ -39,6 +39,11 @@ OUTRO_TREATMENTS = [
     "plain subscribe CTA with no extra framing",
 ]
 
+VISUAL_TREATMENTS = [
+    "stock-footage-led: maximize real subject footage, keep abstract/diagram prompts to the bare minimum needed",
+    "still-image-with-motion: allow more still-photo-style prompts (landscapes, close-ups, portraits) that work well with Ken Burns pans/zooms, alongside video clips",
+    "diagram-and-data: lean into the upper end of the allowed abstract/diagram prompt ratio - more anatomical diagrams, data visualizations, and explanatory graphics than usual",
+]
 
 def _load_history() -> list[dict]:
     if not HISTORY_PATH.exists():
@@ -55,16 +60,17 @@ def _save_history(history: list[dict]):
 
 
 def choose_variation(niche: str, lookback: int = 3) -> dict:
-    """Pick an intro style, narrative structure, and outro treatment that
-    weren't used in the last `lookback` videos for this niche - falls back
-    to picking from the full list if everything's been used recently
-    (e.g. lookback exceeds the number of available options)."""
+    """Pick an intro style, narrative structure, outro treatment, and visual
+    treatment that weren't used in the last `lookback` videos for this
+    niche - falls back to picking from the full list if everything's been
+    used recently (e.g. lookback exceeds the number of available options)."""
     history = _load_history()
     recent = [h for h in history if h.get("niche") == niche][-lookback:]
 
     recent_intros = {h.get("intro_style") for h in recent}
     recent_structures = {h.get("narrative_structure") for h in recent}
     recent_outros = {h.get("outro_treatment") for h in recent}
+    recent_visuals = {h.get("visual_treatment") for h in recent}
 
     def pick(options: list[str], recently_used: set[str]) -> str:
         available = [o for o in options if o not in recently_used]
@@ -74,6 +80,7 @@ def choose_variation(niche: str, lookback: int = 3) -> dict:
         "intro_style": pick(INTRO_STYLES, recent_intros),
         "narrative_structure": pick(NARRATIVE_STRUCTURES, recent_structures),
         "outro_treatment": pick(OUTRO_TREATMENTS, recent_outros),
+        "visual_treatment": pick(VISUAL_TREATMENTS, recent_visuals),
     }
 
 
@@ -85,6 +92,7 @@ def record_variation(niche: str, variation: dict):
         "intro_style": variation.get("intro_style", ""),
         "narrative_structure": variation.get("narrative_structure", ""),
         "outro_treatment": variation.get("outro_treatment", ""),
+        "visual_treatment": variation.get("visual_treatment", ""),
     })
     # Keep history from growing unbounded - last 50 entries is plenty
     _save_history(history[-50:])
@@ -97,4 +105,5 @@ def format_variation_guidance(variation: dict) -> str:
         f"- Intro style: {variation['intro_style']}\n"
         f"- Narrative structure: {variation['narrative_structure']}\n"
         f"- Outro treatment: {variation['outro_treatment']}\n"
+        f"- Visual treatment for b-roll prompts: {variation['visual_treatment']}\n"
     )
