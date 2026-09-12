@@ -12,6 +12,7 @@ from .llm import call_llm
 from .log import log
 from .niche import load_niche, get_script_context, get_visual_context, get_visual_prompt_suffix
 from .research import research_topic
+from .variation import choose_variation, record_variation, format_variation_guidance
 
 
 def _call_claude(prompt: str, max_tokens: int = 3000) -> str:
@@ -78,6 +79,9 @@ def generate_draft(
 
     channel_note = f"\nChannel context: {channel_context}" if channel_context else ""
 
+    variation = choose_variation(niche)
+    variation_guidance = format_variation_guidance(variation)
+
     no_research_warning = ""
     if not research_found:
         no_research_warning = """
@@ -94,7 +98,7 @@ relevant (e.g. "I couldn't verify..."). A vague-but-honest script is REQUIRED
 here \u2014 a specific-but-fabricated script is a serious failure.
 """
 
-    prompt = f"""You are writing a {platform_label} script ({max_words} words max, ~60-90 seconds spoken).{channel_note}{no_research_warning}
+    prompt = f"""You are writing a {platform_label} script ({max_words} words max, ~60-90 seconds spoken).{channel_note}{no_research_warning}{variation_guidance}
 
 {script_context}
 
@@ -178,6 +182,7 @@ Output JSON exactly:
     draft["research"] = research
     draft["niche"] = niche
     draft["platform"] = platform
+    record_variation(niche, variation)
     return draft
 
 
@@ -235,6 +240,9 @@ def generate_long_form_draft(
 
     channel_note = f"\nChannel context: {channel_context}" if channel_context else ""
 
+    variation = choose_variation(niche)
+    variation_guidance = format_variation_guidance(variation)
+
     no_research_warning = ""
     if not research_found:
         no_research_warning = """
@@ -248,7 +256,7 @@ honest script is REQUIRED - a specific-but-fabricated one is a serious failure.
     prompt = f"""You are writing a {platform_label} script: {max_words} words max total
 (target 1,300-1,800 words, ~8-12 minutes spoken), split into discrete SECTIONS
 (chapters). This is long-form, NOT a Short - ignore any short-form word-count
-guidance in the niche context below; only use its tone/pacing/hook/CTA guidance.{channel_note}{no_research_warning}
+guidance in the niche context below; only use its tone/pacing/hook/CTA guidance.{channel_note}{no_research_warning}{variation_guidance}
 
 {script_context}
 
@@ -404,4 +412,5 @@ Output JSON exactly:
     draft["niche"] = niche
     draft["platform"] = "long_form"
     draft["total_words"] = sum(len(s["narration"].split()) for s in clean_sections)
+    record_variation(niche, variation)
     return draft
