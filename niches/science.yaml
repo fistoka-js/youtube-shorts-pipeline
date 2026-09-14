@@ -1,6 +1,7 @@
 name: science
 display_name: "Science & Discovery"
 description: "For channels covering scientific breakthroughs, space, nature, and research."
+youtube_category_id: "28"  # Science & Technology
 script:
   tone: "curious, awestruck, accessible, makes complex things simple"
   pacing: "builds from simple to mind blowing"

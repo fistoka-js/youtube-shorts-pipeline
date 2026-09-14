@@ -1,6 +1,7 @@
 name: general
 display_name: "General"
 description: "Default profile for any topic. Clean, engaging, broadly appealing."
+youtube_category_id: "27"  # Education
 
 script:
   tone: "clear, engaging, conversational, curious"

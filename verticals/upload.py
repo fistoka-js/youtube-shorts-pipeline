@@ -20,6 +20,14 @@ def upload_to_youtube(
     from google.auth.transport.requests import Request
     from googleapiclient.discovery import build
     from googleapiclient.http import MediaFileUpload
+    from .niche import load_niche
+
+    niche_name = draft.get("niche", "general")
+    try:
+        profile = load_niche(niche_name)
+        category_id = str(profile.get("youtube_category_id", "27"))
+    except Exception:
+        category_id = "27"  # Education, safe fallback if niche fails to load
 
     token_path = get_youtube_token_path()
     creds = Credentials.from_authorized_user_file(str(token_path))
@@ -58,7 +66,7 @@ def upload_to_youtube(
             "title": draft.get("youtube_title", draft["news"])[:100],
             "description": description,
             "tags": draft.get("youtube_tags", "").split(","),
-            "categoryId": "28",  # Science & Technology
+            "categoryId": category_id,
             "defaultLanguage": lang,
             "defaultAudioLanguage": lang,
         },
