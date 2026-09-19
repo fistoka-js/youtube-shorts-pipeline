@@ -1,0 +1,60 @@
+name: Produce video from queue
+
+on:
+  workflow_dispatch: {}   # manual trigger for now - schedule can be added later
+  # schedule:
+  #   - cron: "0 14 * * *"  # example: daily at 14:00 UTC, uncomment when ready
+
+jobs:
+  produce:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Restore Google client secret
+        run: echo "${{ secrets.GOOGLE_CLIENT_SECRET_B64 }}" | base64 -d > client_secret.json
+
+      - name: Restore YouTube OAuth token
+        run: |
+          mkdir -p .verticals
+          echo "${{ secrets.YOUTUBE_TOKEN_B64 }}" | base64 -d > .verticals/youtube_token.json
+
+      - name: Write API keys to config
+        run: |
+          mkdir -p .verticals
+          python -c "
+          import json
+          from pathlib import Path
+          config_path = Path('.verticals/config.json')
+          data = json.loads(config_path.read_text()) if config_path.exists() else {}
+          data['ANTHROPIC_API_KEY'] = '${{ secrets.ANTHROPIC_API_KEY }}'
+          data['PEXELS_API_KEY'] = '${{ secrets.PEXELS_API_KEY }}'
+          data['TAVILY_API_KEY'] = '${{ secrets.TAVILY_API_KEY }}'
+          config_path.write_text(json.dumps(data, indent=2))
+          "
+
+      - name: Run queue orchestrator
+        run: python run.py
+
+      - name: Commit queue state changes
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add queue/
+          git diff --staged --quiet || git commit -m "Auto: queue state update from workflow run"
+          git push
