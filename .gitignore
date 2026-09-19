@@ -38,5 +38,6 @@ debug_*.txt
 debug_*.html
 !check_thumbnail.py
 
-queue/pending/*.json
-queue/done/*.json
+# queue/pending and queue/done topic files ARE tracked - they're just
+# topic ideas/metadata, not secrets, and the GitHub Actions workflow
+# needs to see them when it checks out the repo fresh.
