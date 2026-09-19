@@ -10,7 +10,11 @@ from pathlib import Path
 # ─────────────────────────────────────────────────────
 # Skill home directory — all data lives here
 # ─────────────────────────────────────────────────────
-SKILL_DIR = Path(r"E:\Youtube Project\youtube-shorts-pipeline\.verticals")
+import os
+# Local Windows dev machine uses a hardcoded path. CI (GitHub Actions,
+# Linux) sets VERTICALS_SKILL_DIR to a repo-relative path instead, since
+# the hardcoded Windows drive path doesn't exist there.
+SKILL_DIR = Path(os.environ.get("VERTICALS_SKILL_DIR", r"E:\Youtube Project\youtube-shorts-pipeline\.verticals"))
 DRAFTS_DIR = SKILL_DIR / "drafts"
 MEDIA_DIR = SKILL_DIR / "media"
 LOGS_DIR = SKILL_DIR / "logs"

@@ -9,6 +9,8 @@ jobs:
   produce:
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    env:
+      VERTICALS_SKILL_DIR: ${{ github.workspace }}/.verticals
 
     steps:
       - name: Check out repo
