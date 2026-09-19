@@ -37,3 +37,6 @@ check_*.py
 debug_*.txt
 debug_*.html
 !check_thumbnail.py
+
+queue/pending/*.json
+queue/done/*.json
