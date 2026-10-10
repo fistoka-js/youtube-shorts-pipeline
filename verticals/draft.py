@@ -287,12 +287,14 @@ STRUCTURE RULES:
 - Anti-hallucination: only use names, facts, figures found in research above
 
 B-ROLL RULES:
-- Each section gets its own broll_subject: the literal main visual subject
-  for THAT section specifically (1-2 words, e.g. "octopus", "evolutionary
-  diagram", "research laboratory"). Sections about the main topic's subject
-  should share the same broll_subject; sections that shift focus (context,
-  science background, broader implications) should have their own accurate
-  broll_subject rather than defaulting to the main one.
+- Reuse the video's main subject (the top-level broll_subject) as the
+  broll_subject for EVERY section, unless that section is about something
+  genuinely different from it, such as a different animal, a lab, or a
+  machine (1-2 words, e.g. "research laboratory"). Do NOT invent
+  near-duplicate variants of the main subject: if the main subject is
+  "octopus", do NOT write "octopus anatomy" or "octopus gills", just use
+  "octopus". This matters because each distinct broll_subject builds a
+  separate stock-footage pool.
 - Each section gets its own broll_prompts list: roughly 1 prompt per 15-20
   seconds of that section's narration (a ~150-word section is about 3-4 prompts)
 - B-roll prompts are used as STOCK FOOTAGE SEARCH QUERIES, not cinematographer
