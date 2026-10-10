@@ -5,6 +5,10 @@ from pathlib import Path
 from .broll import animate_frame
 from .config import MEDIA_DIR, VIDEO_WIDTH, VIDEO_HEIGHT, run_cmd
 from .log import log
+from .section_timing import compute_section_timings
+
+# Frame rate of every segment (see _prepare_segment: -r 30 / animate_frame fps=30).
+FPS = 30
 
 
 def _ffmpeg_has_libass() -> bool:
@@ -27,7 +31,8 @@ def get_audio_duration(path: Path) -> float:
 
 
 def _prepare_segment(frame: dict, out_path: Path, duration: float, effect: str,
-                     width: int = VIDEO_WIDTH, height: int = VIDEO_HEIGHT) -> Path:
+                     width: int = VIDEO_WIDTH, height: int = VIDEO_HEIGHT,
+                     frame_count: int | None = None) -> Path:
     """Turn one b-roll item (video clip or still image) into a fixed-duration
     segment at the target dimensions, ready for concatenation.
 
@@ -44,13 +49,17 @@ def _prepare_segment(frame: dict, out_path: Path, duration: float, effect: str,
             f"scale={width}:{height}:force_original_aspect_ratio=increase,"
             f"crop={width}:{height}"
         )
+        # frame_count (long-form) gives an exact number of frames; otherwise
+        # the length is set by -t as before (Shorts path).
+        length_args = ["-frames:v", str(frame_count)] if frame_count is not None else ["-t", str(duration)]
         run_cmd([
-            "ffmpeg", "-stream_loop", "-1", "-i", str(src), "-t", str(duration),
+            "ffmpeg", "-stream_loop", "-1", "-i", str(src), *length_args,
             "-vf", vf, "-an", "-r", "30", "-pix_fmt", "yuv420p",
             str(out_path), "-y", "-loglevel", "quiet",
         ])
     else:
-        animate_frame(frame["path"], out_path, duration, effect, width, height)
+        animate_frame(frame["path"], out_path, duration, effect, width, height,
+                      frames=frame_count)
     return out_path
 
 def _compute_frame_durations(frame_count: int, words: list[dict] | None, total_duration: float) -> list[float]:
@@ -82,6 +91,107 @@ def _compute_frame_durations(frame_count: int, words: list[dict] | None, total_d
     return durations
 
 
+def _frame_counts_from_bounds(bounds: list[float]) -> list[int]:
+    """Turn clip boundary times (n+1 values, in seconds, nondecreasing) into a
+    whole number of 1/30 s frames per clip.
+
+    Each boundary is snapped to the frame grid using the running total, so the
+    rounding error never accumulates: the frame counts add up to exactly
+    round(last boundary * 30). Every clip gets at least one frame.
+    """
+    grid = [round(b * FPS) for b in bounds]
+    return [max(grid[i + 1] - grid[i], 1) for i in range(len(bounds) - 1)]
+
+
+def _equal_chunk_frame_counts(frame_count: int, words: list[dict] | None,
+                              total_duration: float) -> list[int]:
+    """Frame counts from the old equal word-chunk split (no padding)."""
+    durs = _compute_frame_durations(frame_count, words, total_duration)
+    bounds = [0.0]
+    for d in durs:
+        bounds.append(bounds[-1] + d)
+    bounds[-1] = total_duration
+    return _frame_counts_from_bounds(bounds)
+
+
+def long_form_frame_counts(frames: list[dict], sections: list[dict],
+                           words: list[dict] | None, total_duration: float) -> list[int]:
+    """Frames per clip for a long-form video, so footage switches at section starts.
+
+    Each section's real start comes from the shared section_timing helper. A
+    section's time runs from its start to the next section that has clips (the
+    last one runs to the audio end), and its clips split that time into equal
+    shares, so its first clip starts at the section start. Sections with no
+    clips give their time to the section before them.
+
+    The clips must match the draft: each section's clips (grouped by section_id,
+    in order) must number the same as its broll_prompts. If not, a warning is
+    logged and the old equal word-chunk split is used instead, so nothing crashes.
+    """
+    n = len(frames)
+    if n == 0:
+        return []
+    if not sections or not words:
+        log("WARNING: long-form clip timing needs sections and word timestamps - "
+            "using the old equal word-chunk split")
+        return _equal_chunk_frame_counts(n, words, total_duration)
+
+    def _fallback(reason: str) -> list[int]:
+        log(f"WARNING: long-form clip timing fell back to the old equal word-chunk split: {reason}")
+        return _equal_chunk_frame_counts(n, words, total_duration)
+
+    section_ids = {sec.get("id", "") for sec in sections}
+    per_section: dict[str, list[int]] = {}
+    last_sid = None
+    finished = set()
+    for i, f in enumerate(frames):
+        sid = f.get("section_id", "")
+        if sid not in section_ids:
+            return _fallback(f"clip {i + 1} has unknown section_id {sid!r}")
+        if sid != last_sid:
+            if sid in finished:
+                return _fallback(f"clips for section {sid} are not all together")
+            if last_sid is not None:
+                finished.add(last_sid)
+            last_sid = sid
+        per_section.setdefault(sid, []).append(i)
+
+    for sec in sections:
+        sid = sec.get("id", "")
+        got = len(per_section.get(sid, []))
+        expected = len(sec.get("broll_prompts", []) or [])
+        if got != expected:
+            return _fallback(f"section {sid} has {got} clips but {expected} broll prompts")
+
+    timings = compute_section_timings(sections, words)
+    start_of = {t["id"]: t["start"] for t in timings}
+    clip_sections = [sec.get("id", "") for sec in sections if per_section.get(sec.get("id", ""))]
+
+    clip_start = [0.0] * n  # start time of each clip
+    for pos, sid in enumerate(clip_sections):
+        idxs = per_section[sid]
+        start = start_of[sid]
+        if pos + 1 < len(clip_sections):
+            end = start_of[clip_sections[pos + 1]]
+        else:
+            end = total_duration
+        end = max(end, start)
+        share = (end - start) / len(idxs)
+        for c, i in enumerate(idxs):
+            clip_start[i] = start + c * share
+    clip_start[0] = 0.0  # the first clip always begins at the very start
+
+    if any(clip_start[i] < clip_start[i - 1] for i in range(1, n)):
+        return _fallback("section starts are out of order in the clip list")
+
+    counts = _frame_counts_from_bounds(clip_start + [total_duration])
+    expected_total = round(total_duration * FPS)
+    if sum(counts) != expected_total:
+        log(f"WARNING: long-form clip frames add up to {sum(counts)}, expected {expected_total} "
+            f"(audio {total_duration:.3f}s at {FPS} fps)")
+    return counts
+
+
 def assemble_video(
     frames: list[dict],
     voiceover: Path,
@@ -95,21 +205,36 @@ def assemble_video(
     words: list[dict] | None = None,
     width: int = VIDEO_WIDTH,
     height: int = VIDEO_HEIGHT,
+    sections: list[dict] | None = None,
 ) -> Path:
     """Assemble final video from b-roll (video clips + image fallbacks),
 voiceover, captions, and music. Defaults to portrait (Shorts); pass
-width/height=1920/1080 for landscape long-form output."""
+width/height=1920/1080 for landscape long-form output.
+
+sections: long-form only. When given, clips switch at each section's real
+start (see long_form_frame_counts) and each clip gets an exact frame count.
+When omitted (Shorts), the original equal word-chunk timing is used."""
     log("Assembling video...")
     duration = get_audio_duration(voiceover)
-    frame_durations = _compute_frame_durations(len(frames), words, duration)
     effects = ["zoom_in", "pan_right", "zoom_out"]
+
+    frame_counts = None
+    frame_durations = None
+    if sections is None:
+        frame_durations = _compute_frame_durations(len(frames), words, duration)
+    else:
+        frame_counts = long_form_frame_counts(frames, sections, words, duration)
 
     # Prepare each b-roll item as a segment sized to match the actual speech
     # it accompanies (falls back to an even split if no word timing is available)
     segments = []
     for i, frame in enumerate(frames):
         seg = out_dir / f"seg_{i}.mp4"
-        _prepare_segment(frame, seg, frame_durations[i] + 0.1, effects[i % len(effects)], width, height)
+        if frame_counts is None:
+            _prepare_segment(frame, seg, frame_durations[i] + 0.1, effects[i % len(effects)], width, height)
+        else:
+            _prepare_segment(frame, seg, frame_counts[i] / FPS, effects[i % len(effects)], width, height,
+                             frame_count=frame_counts[i])
         segments.append(seg)
 
     # Concat segments (escape single quotes for ffmpeg concat demuxer)

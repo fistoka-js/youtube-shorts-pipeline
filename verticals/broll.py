@@ -511,10 +511,15 @@ def generate_broll_long_form(sections: list, out_dir: Path,
     return frames
 
 def animate_frame(img_path: Path, out_path: Path, duration: float, effect: str = "zoom_in",
-                  width: int = VIDEO_WIDTH, height: int = VIDEO_HEIGHT):
-    """Ken Burns animation on a still frame (used for image fallbacks)."""
+                  width: int = VIDEO_WIDTH, height: int = VIDEO_HEIGHT,
+                  frames: int | None = None):
+    """Ken Burns animation on a still frame (used for image fallbacks).
+
+    frames: optional exact output frame count. When given (long-form), the
+    clip is exactly that many frames at 30 fps; when omitted, the length is
+    duration * 30 frames as before (Shorts path)."""
     fps = 30
-    n = int(duration * fps)
+    n = frames if frames is not None else int(duration * fps)
     w, h = width, height
     if effect == "zoom_in":
         vf = (f"scale={int(w*1.12)}:{int(h*1.12)},"
@@ -528,8 +533,9 @@ def animate_frame(img_path: Path, out_path: Path, duration: float, effect: str =
         vf = (f"scale={int(w*1.12)}:{int(h*1.12)},"
               f"zoompan=z='1.0+0.12*on/{n}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
               f":d={n}:s={w}x{h}:fps={fps}")
+    length_args = ["-frames:v", str(frames)] if frames is not None else ["-t", str(duration)]
     run_cmd([
         "ffmpeg", "-loop", "1", "-i", str(img_path),
-        "-vf", vf, "-t", str(duration), "-r", str(fps),
+        "-vf", vf, *length_args, "-r", str(fps),
         "-pix_fmt", "yuv420p", str(out_path), "-y", "-loglevel", "quiet",
     ])

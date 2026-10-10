@@ -406,6 +406,7 @@ def cmd_produce_long_form(args):
             duck_filter=music_result.get("duck_filter"),
             words=captions_result.get("words"),
             width=lf_width, height=lf_height,
+            sections=sections,
         )
         state.complete_stage("assemble", {"video_path": str(video_path)})
     else:
