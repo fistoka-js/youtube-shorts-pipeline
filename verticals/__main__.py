@@ -318,23 +318,20 @@ def cmd_produce_long_form(args):
         }
 
     # Compute YouTube chapter markers from each section's real start time
-    # in the audio (via Whisper word timestamps) - same word-count-walk
-    # technique used in broll.py's section_spans. YouTube requires: first
+    # in the audio (via Whisper word timestamps, shared section_timing helper
+    # used by broll.py and shorts_extract.py too). YouTube requires: first
     # chapter at 0:00, at least 3 chapters, each >=10s apart, ascending.
     words = captions_result.get("words")
     chapters = []
     if words:
-        word_idx = 0
-        for sec in sections:
-            sec_word_count = len(sec.get("narration", "").split())
-            start_idx = min(word_idx, len(words) - 1)
-            if sec_word_count > 0 and start_idx < len(words):
-                start_time = words[start_idx]["start"]
+        from .section_timing import compute_section_timings
+        timings = compute_section_timings(sections, words)
+        for sec, t in zip(sections, timings):
+            if len(sec.get("narration", "").split()) > 0:
                 chapters.append({
                     "heading": sec.get("heading", sec.get("id", "")),
-                    "start_seconds": start_time,
+                    "start_seconds": t["start"],
                 })
-            word_idx += sec_word_count
 
         # First chapter must start at 0:00 exactly (YouTube requirement).
         if chapters:

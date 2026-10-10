@@ -6,24 +6,14 @@ from pathlib import Path
 
 from .config import run_cmd
 from .log import log
+from .section_timing import compute_section_timings
 
 
-def _compute_section_spans(sections: list, words: list[dict], total_duration: float) -> dict:
+def _compute_section_spans(sections: list, words: list[dict]) -> dict:
     """Real start/end time for every section (not just start, like chapters
-    needs) - walks the same concatenated-narration word-count order used
-    everywhere else in this pipeline."""
-    spans = {}
-    word_idx = 0
-    for i, sec in enumerate(sections):
-        sec_id = sec.get("id", "")
-        sec_word_count = len(sec.get("narration", "").split())
-        start_idx = min(word_idx, len(words) - 1)
-        end_idx = min(word_idx + sec_word_count - 1, len(words) - 1)
-        start_time = words[start_idx]["start"] if start_idx < len(words) else 0.0
-        end_time = words[end_idx]["end"] if end_idx < len(words) else total_duration
-        spans[sec_id] = (start_time, end_time)
-        word_idx += sec_word_count
-    return spans
+    needs). Uses the shared section_timing helper so boundaries match the
+    chapters and b-roll timing."""
+    return {t["id"]: (t["start"], t["end"]) for t in compute_section_timings(sections, words)}
 
 
 def _trim_and_crop_to_portrait(video_path: Path, out_path: Path, start: float, end: float):
@@ -58,10 +48,7 @@ def extract_shorts_from_cutpoints(draft: dict, video_path: Path, out_dir: Path) 
         log("No shorts_cutpoints in this draft - nothing to extract")
         return []
 
-    from .assemble import get_audio_duration
-    total_duration = get_audio_duration(video_path)
-
-    spans = _compute_section_spans(sections, words, total_duration)
+    spans = _compute_section_spans(sections, words)
 
     results = []
     for i, cp in enumerate(cutpoints):

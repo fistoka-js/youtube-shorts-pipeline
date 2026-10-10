@@ -9,6 +9,7 @@ from PIL import Image
 from .config import VIDEO_WIDTH, VIDEO_HEIGHT, run_cmd
 from .log import log
 from .retry import with_retry
+from .section_timing import compute_section_timings
 
 
 def get_pexels_key() -> str:
@@ -430,23 +431,16 @@ def generate_broll_long_form(sections: list, out_dir: Path,
     frames = []
     used_video_ids = set()  # global across the whole video, not per-pool
 
-    # Map each section to its real speech span using Whisper word timestamps:
-    # walk through the concatenated narration in the same order sections
-    # were joined (cmd_produce_long_form joins them with "\n\n"), matching
-    # word counts to timestamp indices. This gives each section's ACTUAL
-    # start/end time in the final audio, not an estimate from word count.
+    # Map each section to its real speech span using Whisper word timestamps
+    # (shared helper: finds each section's opening words in the audio, so the
+    # span is the ACTUAL start/end time in the final audio, not a word-count
+    # estimate).
     section_spans = {}  # sec_id -> (start_time, end_time)
     if words:
-        word_idx = 0
-        for sec in sections:
-            sec_word_count = len(sec.get("narration", "").split())
-            start_idx = min(word_idx, len(words) - 1)
-            end_idx = min(word_idx + sec_word_count - 1, len(words) - 1)
-            if sec_word_count > 0 and start_idx < len(words):
-                start_time = words[start_idx]["start"]
-                end_time = words[end_idx]["end"] if end_idx < len(words) else words[-1]["end"]
-                section_spans[sec.get("id", "")] = (start_time, end_time)
-            word_idx += sec_word_count
+        timings = compute_section_timings(sections, words)
+        for sec, t in zip(sections, timings):
+            if len(sec.get("narration", "").split()) > 0:
+                section_spans[sec.get("id", "")] = (t["start"], t["end"])
 
     for sec in sections:
         sec_id = sec.get("id", "")
