@@ -206,6 +206,7 @@ def assemble_video(
     width: int = VIDEO_WIDTH,
     height: int = VIDEO_HEIGHT,
     sections: list[dict] | None = None,
+    slot_out: list | None = None,
 ) -> Path:
     """Assemble final video from b-roll (video clips + image fallbacks),
 voiceover, captions, and music. Defaults to portrait (Shorts); pass
@@ -213,7 +214,10 @@ width/height=1920/1080 for landscape long-form output.
 
 sections: long-form only. When given, clips switch at each section's real
 start (see long_form_frame_counts) and each clip gets an exact frame count.
-When omitted (Shorts), the original equal word-chunk timing is used."""
+When omitted (Shorts), the original equal word-chunk timing is used.
+
+slot_out: optional list. When given, the length in seconds of each slot's
+segment (one per frame, in order) is appended to it, for the build report."""
     log("Assembling video...")
     duration = get_audio_duration(voiceover)
     effects = ["zoom_in", "pan_right", "zoom_out"]
@@ -228,14 +232,19 @@ When omitted (Shorts), the original equal word-chunk timing is used."""
     # Prepare each b-roll item as a segment sized to match the actual speech
     # it accompanies (falls back to an even split if no word timing is available)
     segments = []
+    slot_seconds = []  # length of each slot's segment, for the build report
     for i, frame in enumerate(frames):
         seg = out_dir / f"seg_{i}.mp4"
         if frame_counts is None:
+            slot_seconds.append(frame_durations[i] + 0.1)
             _prepare_segment(frame, seg, frame_durations[i] + 0.1, effects[i % len(effects)], width, height)
         else:
+            slot_seconds.append(frame_counts[i] / FPS)
             _prepare_segment(frame, seg, frame_counts[i] / FPS, effects[i % len(effects)], width, height,
                              frame_count=frame_counts[i])
         segments.append(seg)
+    if slot_out is not None:
+        slot_out.extend(slot_seconds)
 
     # Concat segments (escape single quotes for ffmpeg concat demuxer)
     concat_file = out_dir / "concat.txt"

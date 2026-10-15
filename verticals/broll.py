@@ -6,6 +6,7 @@ import re
 import requests
 from PIL import Image
 
+from . import build_report
 from .config import VIDEO_WIDTH, VIDEO_HEIGHT, run_cmd
 from .log import log
 from .retry import with_retry
@@ -159,7 +160,8 @@ def _build_subject_pool(subject: str, api_key: str, topic_context: str = "",
 
 
 def _best_pool_match(prompt_text: str, pool: list, used_ids: set,
-                     min_duration: float = 0.0) -> dict | None:
+                     min_duration: float = 0.0,
+                     score_out: dict | None = None) -> dict | None:
     """Pick the best-matching clip from the verified pool for a prompt,
     using CLIP text-to-image similarity. Excludes already-used clips.
 
@@ -168,6 +170,10 @@ def _best_pool_match(prompt_text: str, pool: list, used_ids: set,
     similarity tier, picks the longest rather than picking on pure
     similarity alone (which frequently chose a great-match-but-too-short
     clip over a slightly-less-perfect-but-long-enough one).
+
+    score_out: optional dict. When given and a clip is picked, the CLIP score
+    of that clip is stored in it under "score" (for the build report only).
+    The choice itself is identical with or without it.
     """
     import torch
     available = [p for p in pool if p["video"].get("id") not in used_ids]
@@ -192,13 +198,20 @@ def _best_pool_match(prompt_text: str, pool: list, used_ids: set,
         # short one, and Pexels rarely returns an exact-length match.
         top_n = max(1, int(len(scored) * 0.4))
         top_candidates = scored[:top_n]
-        best_entry = max(
+        best_score, best_entry = max(
             top_candidates,
             key=lambda x: _pexels_video_duration(x[1]["video"]),
-        )[1]
+        )
+        if score_out is not None:
+            score_out["score"] = float(best_score)
         return best_entry
 
-    return scored[0][1] if scored else None
+    if not scored:
+        return None
+    best_score, best_entry = scored[0]
+    if score_out is not None:
+        score_out["score"] = float(best_score)
+    return best_entry
 
 
 def _pexels_video_duration(video: dict) -> float:
@@ -220,14 +233,24 @@ def _fetch_pexels_candidates(query: str, api_key: str) -> list[dict]:
     return r.json().get("videos", [])
 
 
-def _best_file_link(video: dict) -> str | None:
-    """Pick the highest-res file link from a Pexels video, preferring portrait."""
+def _best_file_entry(video: dict) -> dict | None:
+    """The video_files entry that _best_file_link picks (highest height,
+    portrait files preferred). Used by the build report to read the size of
+    the file that is actually downloaded."""
     files = video.get("video_files", [])
     portrait = [f for f in files if f.get("height", 0) > f.get("width", 0)]
     candidates = portrait or files
     if not candidates:
         return None
-    return max(candidates, key=lambda f: f.get("height", 0)).get("link")
+    return max(candidates, key=lambda f: f.get("height", 0))
+
+
+def _best_file_link(video: dict) -> str | None:
+    """Pick the highest-res file link from a Pexels video, preferring portrait."""
+    entry = _best_file_entry(video)
+    if entry is None:
+        return None
+    return entry.get("link")
 
 
 def _search_pexels_video(
@@ -235,9 +258,13 @@ def _search_pexels_video(
     exclude_ids: set | None = None,
     fallback_query: str = "",
     topic_context: str = "",
+    picked_out: dict | None = None,
 ) -> tuple[str | None, int | None]:
     """Individual Pexels search with fallback — used only when the pool is
-    empty or exhausted. Returns (MP4 URL, video id) or (None, None)."""
+    empty or exhausted. Returns (MP4 URL, video id) or (None, None).
+
+    picked_out: optional dict. When given and a clip is chosen, the Pexels video
+    dict is stored in it under "video" (for the build report only)."""
     exclude_ids = exclude_ids or set()
     videos = _fetch_pexels_candidates(query, api_key)
     available = [v for v in videos if v.get("id") not in exclude_ids]
@@ -245,6 +272,8 @@ def _search_pexels_video(
     for candidate in available[:5]:
         link = _best_file_link(candidate)
         if link:
+            if picked_out is not None:
+                picked_out["video"] = candidate
             return link, candidate.get("id")
 
     if fallback_query and fallback_query.lower() != query.lower():
@@ -253,6 +282,8 @@ def _search_pexels_video(
         for candidate in [v for v in fb if v.get("id") not in exclude_ids][:5]:
             link = _best_file_link(candidate)
             if link:
+                if picked_out is not None:
+                    picked_out["video"] = candidate
                 return link, candidate.get("id")
 
     return None, None
@@ -307,15 +338,38 @@ def _generate_pollinations_image(prompt: str, out_path: Path) -> Path:
     return out_path
 
 
+def _record_clip(report_rows, *, slot, section, kind, source, out_w, out_h,
+                 video=None, clip_duration=None, clip_score=None) -> None:
+    """Append one build-report row (see build_report.py). Does nothing when
+    report_rows is None, and never raises: the report must not change a build."""
+    if report_rows is None:
+        return
+    try:
+        entry = _best_file_entry(video) if video is not None else None
+        row = build_report.make_clip_row(
+            slot=slot, section=section, kind=kind, source=source,
+            out_w=out_w, out_h=out_h, video=video, file_entry=entry,
+            clip_duration=clip_duration, clip_score=clip_score,
+        )
+    except Exception as e:
+        log(f"  Build report could not measure slot {slot}: {e}")
+        row = build_report.empty_row(slot, section, kind, source)
+    report_rows.append(row)
+
+
 # ── Main entry point ─────────────────────────────────────────────────────
 
 def generate_broll(prompts: list, out_dir: Path, clip_duration: float = 4.0,
-                   topic_context: str = "", broll_subject: str = "") -> list[dict]:
+                   topic_context: str = "", broll_subject: str = "",
+                   report_rows: list | None = None) -> list[dict]:
     """Pool-first b-roll: search Pexels ONCE for the main subject, verify in
     batch, then match each prompt to the best clip from that pool. Falls back
     to individual search only when the pool is empty or exhausted.
 
     Returns a list of dicts: {"path": Path, "type": "video" | "image"}.
+
+    report_rows: optional list. When given, one build-report row per slot is
+    appended to it (in slot order). It does not change the clips chosen.
     """
     import time
 
@@ -345,7 +399,8 @@ def generate_broll(prompts: list, out_dir: Path, clip_duration: float = 4.0,
 
         # 1. Try pool (always, regardless of whether prompt mentions subject).
         if pool and not got_video:
-            match = _best_pool_match(prompt, pool, used_video_ids)
+            score_out = {}
+            match = _best_pool_match(prompt, pool, used_video_ids, score_out=score_out)
             if match:
                 video = match["video"]
                 link = _best_file_link(video)
@@ -356,16 +411,21 @@ def generate_broll(prompts: list, out_dir: Path, clip_duration: float = 4.0,
                     out_path = out_dir / f"broll_{i}.mp4"
                     _download_and_crop_video(link, out_path, clip_duration)
                     frames.append({"path": out_path, "type": "video"})
+                    _record_clip(report_rows, slot=i + 1, section=None, kind="video",
+                                 source="pool", out_w=VIDEO_WIDTH, out_h=VIDEO_HEIGHT,
+                                 video=video, clip_duration=clip_duration,
+                                 clip_score=score_out.get("score"))
                     got_video = True
                     log(f"  Matched from pool: \"{prompt[:60]}\"")
 
         # 2. Individual Pexels search (pool empty or exhausted).
         if not got_video and pexels_key:
             try:
+                picked = {}
                 url, vid_id = _search_pexels_video(
                     prompt.split(".")[0].strip(), pexels_key,
                     exclude_ids=used_video_ids, fallback_query=subject,
-                    topic_context=topic_context,
+                    topic_context=topic_context, picked_out=picked,
                 )
                 if url:
                     if vid_id is not None:
@@ -373,6 +433,10 @@ def generate_broll(prompts: list, out_dir: Path, clip_duration: float = 4.0,
                     out_path = out_dir / f"broll_{i}.mp4"
                     _download_and_crop_video(url, out_path, clip_duration)
                     frames.append({"path": out_path, "type": "video"})
+                    _record_clip(report_rows, slot=i + 1, section=None, kind="video",
+                                 source="last_resort_search", out_w=VIDEO_WIDTH,
+                                 out_h=VIDEO_HEIGHT, video=picked.get("video"),
+                                 clip_duration=clip_duration)
                     got_video = True
                     log(f"  Found via individual search: \"{prompt[:60]}\"")
             except Exception as e:
@@ -384,11 +448,15 @@ def generate_broll(prompts: list, out_dir: Path, clip_duration: float = 4.0,
                 out_path = out_dir / f"broll_{i}.png"
                 _generate_pollinations_image(prompt, out_path)
                 frames.append({"path": out_path, "type": "image"})
+                _record_clip(report_rows, slot=i + 1, section=None, kind="image",
+                             source="image_fallback", out_w=VIDEO_WIDTH, out_h=VIDEO_HEIGHT)
                 log(f"  No stock match — generated fallback image")
                 time.sleep(1.0)
             except Exception as e:
                 log(f"  Fallback image failed: {e} — using solid color")
                 frames.append({"path": _fallback_frame(i, out_dir), "type": "image"})
+                _record_clip(report_rows, slot=i + 1, section=None, kind="image",
+                             source="solid_color", out_w=VIDEO_WIDTH, out_h=VIDEO_HEIGHT)
 
     return frames
 
@@ -396,7 +464,8 @@ def generate_broll_long_form(sections: list, out_dir: Path,
                              topic_context: str = "",
                              width: int = VIDEO_WIDTH, height: int = VIDEO_HEIGHT,
                              orientation: str | None = "landscape",
-                             words: list[dict] | None = None) -> list[dict]:
+                             words: list[dict] | None = None,
+                             report_rows: list | None = None) -> list[dict]:
     """Pool-first b-roll for long-form videos with multiple sections, each
     potentially having a different visual subject (e.g. "octopus" for most
     sections, "medical research" for a science-context section).
@@ -409,6 +478,10 @@ def generate_broll_long_form(sections: list, out_dir: Path,
     Returns a list of dicts: {"path": Path, "type": "video" | "image",
     "section_id": str} — section_id lets assembly know which narration
     chunk each clip belongs to.
+
+    report_rows: optional list. When given, one build-report row per slot is
+    appended to it (slot = position in the returned list, 1-based). It does
+    not change the clips chosen or their timing.
     """
     import time
 
@@ -465,7 +538,9 @@ def generate_broll_long_form(sections: list, out_dir: Path,
             got_video = False
 
             if pool and not got_video:
-                match = _best_pool_match(prompt, pool, used_video_ids, min_duration=clip_duration)
+                score_out = {}
+                match = _best_pool_match(prompt, pool, used_video_ids,
+                                         min_duration=clip_duration, score_out=score_out)
                 if match:
                     video = match["video"]
                     link = _best_file_link(video)
@@ -476,15 +551,20 @@ def generate_broll_long_form(sections: list, out_dir: Path,
                         out_path = out_dir / f"broll_{sec_id}_{i}.mp4"
                         _download_and_crop_video(link, out_path, clip_duration, width, height)
                         frames.append({"path": out_path, "type": "video", "section_id": sec_id})
+                        _record_clip(report_rows, slot=len(frames), section=sec_id, kind="video",
+                                     source="pool", out_w=width, out_h=height, video=video,
+                                     clip_duration=clip_duration,
+                                     clip_score=score_out.get("score"))
                         got_video = True
                         log(f"  Matched from pool: \"{prompt[:60]}\"")
 
             if not got_video and pexels_key:
                 try:
+                    picked = {}
                     url, vid_id = _search_pexels_video(
                         prompt.split(".")[0].strip(), pexels_key,
                         exclude_ids=used_video_ids, fallback_query=subject,
-                        topic_context=topic_context,
+                        topic_context=topic_context, picked_out=picked,
                     )
                     if url:
                         if vid_id is not None:
@@ -492,6 +572,9 @@ def generate_broll_long_form(sections: list, out_dir: Path,
                         out_path = out_dir / f"broll_{sec_id}_{i}.mp4"
                         _download_and_crop_video(url, out_path, clip_duration, width, height)
                         frames.append({"path": out_path, "type": "video", "section_id": sec_id})
+                        _record_clip(report_rows, slot=len(frames), section=sec_id, kind="video",
+                                     source="last_resort_search", out_w=width, out_h=height,
+                                     video=picked.get("video"), clip_duration=clip_duration)
                         got_video = True
                         log(f"  Found via individual search: \"{prompt[:60]}\"")
                 except Exception as e:
@@ -502,11 +585,15 @@ def generate_broll_long_form(sections: list, out_dir: Path,
                     out_path = out_dir / f"broll_{sec_id}_{i}.png"
                     _generate_pollinations_image(prompt, out_path)
                     frames.append({"path": out_path, "type": "image", "section_id": sec_id})
+                    _record_clip(report_rows, slot=len(frames), section=sec_id, kind="image",
+                                 source="image_fallback", out_w=width, out_h=height)
                     log(f"  No stock match \u2014 generated fallback image")
                     time.sleep(1.0)
                 except Exception as e:
                     log(f"  Fallback image failed: {e} \u2014 using solid color")
                     frames.append({"path": _fallback_frame(len(frames), out_dir), "type": "image", "section_id": sec_id})
+                    _record_clip(report_rows, slot=len(frames), section=sec_id, kind="image",
+                                 source="solid_color", out_w=width, out_h=height)
 
     return frames
 

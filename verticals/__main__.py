@@ -128,15 +128,22 @@ def cmd_produce(args):
     print(f"\n  Producing {lang.upper()} video for job {job_id} [niche: {niche_name}]")
 
     # B-roll
+    from .config import VIDEO_WIDTH, VIDEO_HEIGHT
+    from . import build_report
+    report_path = build_report.report_path_for(draft_path, job_id, lang)
     if force or not state.is_done("broll"):
+        broll_rows = []
         frames = generate_broll(
             draft.get("broll_prompts", ["Cinematic landscape"] * 12), work_dir,
             topic_context=f"{draft.get('news', '')} {draft.get('niche', '')}",
             broll_subject=draft.get("broll_subject", ""),
+            report_rows=broll_rows,
         )
         state.complete_stage("broll", {
             "frames": [{"path": str(f["path"]), "type": f["type"]} for f in frames]
         })
+        build_report.save_broll_stage(report_path, job_id, lang, "shorts",
+                                      VIDEO_WIDTH, VIDEO_HEIGHT, broll_rows)
     else:
         log("Skipping b-roll (already done)")
         raw = state.get_artifact("broll", "frames", [])
@@ -207,6 +214,7 @@ def cmd_produce(args):
 
     # Assemble
     if force or not state.is_done("assemble"):
+        slot_seconds = []
         video_path = assemble_video(
             frames=frames,
             voiceover=vo_path,
@@ -218,8 +226,10 @@ def cmd_produce(args):
             music_path=music_result.get("track_path"),
             duck_filter=music_result.get("duck_filter"),
             words=captions_result.get("words"),
+            slot_out=slot_seconds,
         )
         state.complete_stage("assemble", {"video_path": str(video_path)})
+        build_report.record_assembly(report_path, slot_seconds)
     else:
         log("Skipping assembly (already done)")
         video_path = Path(state.get_artifact("assemble", "video_path"))
@@ -353,16 +363,22 @@ def cmd_produce_long_form(args):
     # (each section's real narration span / its own prompt count), so
     # downloaded clips match what they'll actually need instead of an
     # estimate - eliminates most of the internal looping seen before.
+    from . import build_report
+    report_path = build_report.report_path_for(draft_path, job_id, lang)
     if force or not state.is_done("broll"):
+        broll_rows = []
         frames = generate_broll_long_form(
             sections, work_dir,
             topic_context=f"{draft.get('news', '')} {draft.get('niche', '')}",
             width=lf_width, height=lf_height,
             words=captions_result.get("words"),
+            report_rows=broll_rows,
         )
         state.complete_stage("broll", {
             "frames": [{"path": str(f["path"]), "type": f["type"], "section_id": f["section_id"]} for f in frames]
         })
+        build_report.save_broll_stage(report_path, job_id, lang, "long_form",
+                                      lf_width, lf_height, broll_rows)
     else:
         log("Skipping b-roll (already done)")
         raw = state.get_artifact("broll", "frames", [])
@@ -394,6 +410,7 @@ def cmd_produce_long_form(args):
 
     # Assemble (landscape dimensions for long-form)
     if force or not state.is_done("assemble"):
+        slot_seconds = []
         video_path = assemble_video(
             frames=frames,
             voiceover=vo_path,
@@ -407,8 +424,10 @@ def cmd_produce_long_form(args):
             words=captions_result.get("words"),
             width=lf_width, height=lf_height,
             sections=sections,
+            slot_out=slot_seconds,
         )
         state.complete_stage("assemble", {"video_path": str(video_path)})
+        build_report.record_assembly(report_path, slot_seconds)
     else:
         log("Skipping assembly (already done)")
         video_path = Path(state.get_artifact("assemble", "video_path"))
