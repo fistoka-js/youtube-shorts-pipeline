@@ -91,7 +91,7 @@ def cmd_draft(args):
 
 
 def cmd_produce(args):
-    from .broll import generate_broll
+    from .broll import generate_broll, estimate_slot_seconds
     from .tts import generate_voiceover
     from .captions import generate_captions
     from .music import select_and_prepare_music
@@ -133,11 +133,16 @@ def cmd_produce(args):
     report_path = build_report.report_path_for(draft_path, job_id, lang)
     if force or not state.is_done("broll"):
         broll_rows = []
+        broll_prompts = draft.get("broll_prompts", ["Cinematic landscape"] * 12)
+        # The voiceover is made AFTER b-roll, so the slot length is estimated from
+        # the same script text the voiceover will speak (see broll.estimate_slot_seconds).
+        est_slot = estimate_slot_seconds(script, len(broll_prompts))
         frames = generate_broll(
-            draft.get("broll_prompts", ["Cinematic landscape"] * 12), work_dir,
+            broll_prompts, work_dir,
             topic_context=f"{draft.get('news', '')} {draft.get('niche', '')}",
             broll_subject=draft.get("broll_subject", ""),
             report_rows=broll_rows,
+            est_slot_seconds=est_slot,
         )
         state.complete_stage("broll", {
             "frames": [{"path": str(f["path"]), "type": f["type"]} for f in frames]

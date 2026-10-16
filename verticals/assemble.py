@@ -36,8 +36,9 @@ def _prepare_segment(frame: dict, out_path: Path, duration: float, effect: str,
     """Turn one b-roll item (video clip or still image) into a fixed-duration
     segment at the target dimensions, ready for concatenation.
 
-    Video clips are downloaded at a fixed short duration (see broll.py's
-    clip_duration), but the actual duration needed here is computed from
+    Video clips are downloaded at their own length, capped at broll.py's
+    MAX_CLIP_SECONDS (Shorts), or at a fixed length for long-form, but the
+    actual duration needed here is computed from
     real speech timing and can be much longer (especially for long-form,
     where ~50 clips share ~10 minutes of narration). -stream_loop makes the
     source clip repeat as many times as needed to fill the requested

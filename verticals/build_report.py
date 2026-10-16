@@ -86,6 +86,14 @@ def clip_length_on_disk(clip_duration, native_duration) -> float | None:
         return None
 
 
+def _usable_length(value) -> float | None:
+    """value as a float when it is a real positive number, else None (bools are not lengths)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) and number > 0 else None
+
+
 def loops(slot_duration, clip_length) -> bool | None:
     """True when the slot is longer than the saved clip (plus the tolerance), so
     the clip has to repeat to fill it. None when either length is unknown."""
@@ -125,12 +133,20 @@ def empty_row(slot, section, kind, source) -> dict:
         "crop_side": None,
         "center_score": None,
         "chosen_score": None,
+        # The real length of the saved clip file (seconds), probed after it was
+        # written. The loop flag is judged against this. Null when not measured
+        # (e.g. long-form, which is trimmed to its own per-section length).
+        "saved_clip_seconds": None,
+        # The slot length estimated before the voiceover existed, used to prefer
+        # clips long enough for the slot (JSON only; not shown in the table).
+        "est_slot_seconds": None,
     }
 
 
 def make_clip_row(*, slot, section, kind, source, out_w, out_h,
                   video=None, file_entry=None, clip_duration=None,
-                  clip_score=None, crop=None) -> dict:
+                  clip_score=None, crop=None, saved_clip_seconds=None,
+                  est_slot_seconds=None) -> dict:
     """One build-report row for one slot.
 
     kind: "video" (a Pexels clip) or "image" (Pollinations still or solid colour).
@@ -155,6 +171,8 @@ def make_clip_row(*, slot, section, kind, source, out_w, out_h,
         crop_side=crop.get("crop_side"),
         center_score=crop.get("center_score"),
         chosen_score=crop.get("chosen_score"),
+        saved_clip_seconds=saved_clip_seconds,
+        est_slot_seconds=est_slot_seconds,
     )
     video = video or {}
     file_entry = file_entry or {}
@@ -187,10 +205,14 @@ def apply_slot_durations(rows: list, slot_durations: list) -> None:
             slot_len = float(slot_durations[k])
             row["slot_duration"] = round(slot_len, 3)
             if row.get("type") == "video":
-                row["loop"] = loops(
-                    slot_len,
-                    clip_length_on_disk(row.get("clip_duration"), row.get("native_duration")),
-                )
+                saved = _usable_length(row.get("saved_clip_seconds"))
+                if saved is not None:
+                    # The real saved file length (Shorts, probed after writing).
+                    length = saved
+                else:
+                    length = clip_length_on_disk(row.get("clip_duration"),
+                                                 row.get("native_duration"))
+                row["loop"] = loops(slot_len, length)
             else:
                 row["loop"] = False
         except (TypeError, ValueError):

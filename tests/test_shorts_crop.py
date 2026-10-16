@@ -310,6 +310,8 @@ class _FakeMedia:
         if cmd[0] == "ffprobe":
             if self.fail_probe:
                 raise RuntimeError("ffprobe broke")
+            if "csv=p=0" in cmd:  # plain length query (clip length probing)
+                return SimpleNamespace(stdout=f"{self.native:.6f}\n", returncode=0)
             payload = {"streams": [{"width": self.src_w, "height": self.src_h}],
                        "format": {"duration": f"{self.native:.6f}"}}
             return SimpleNamespace(stdout=json.dumps(payload), returncode=0)
