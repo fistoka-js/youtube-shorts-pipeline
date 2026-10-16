@@ -8,10 +8,12 @@ upload the same template with superficial word swaps).
 """
 
 import json
+import os
 import random
 from pathlib import Path
 
 from .config import SKILL_DIR
+from .log import get_logger
 
 HISTORY_PATH = SKILL_DIR / "variation_history.json"
 
@@ -45,18 +47,60 @@ VISUAL_TREATMENTS = [
     "diagram-and-data: lean into the upper end of the allowed abstract/diagram prompt ratio - more anatomical diagrams, data visualizations, and explanatory graphics than usual",
 ]
 
+
+def _override_path() -> Path | None:
+    """The path from VARIATION_HISTORY_PATH, or None when it is unset or blank."""
+    override = os.environ.get("VARIATION_HISTORY_PATH", "").strip()
+    return Path(override) if override else None
+
+
+def _history_path() -> Path:
+    """Where the history file lives. VARIATION_HISTORY_PATH overrides the
+    default (the cloud workflow points it at queue/ so the history is saved
+    back to the repo). Unset or blank means the default HISTORY_PATH."""
+    override = _override_path()
+    return override if override is not None else HISTORY_PATH
+
+
 def _load_history() -> list[dict]:
-    if not HISTORY_PATH.exists():
+    path = _history_path()
+    if not path.exists():
         return []
+    if _override_path() is None:
+        # Default path: exactly as before - the parsed file as-is, and an
+        # empty history only if the file cannot be read or parsed.
+        try:
+            return json.loads(path.read_text())
+        except Exception:
+            return []
+    # Env var path (cloud): validate, so an empty or damaged file cannot crash the run.
     try:
-        return json.loads(HISTORY_PATH.read_text())
-    except Exception:
+        data = json.loads(path.read_text())
+    except Exception as e:
+        get_logger().warning(f"Variation history {path} is unreadable ({e}); starting with an empty history.")
         return []
+    if not isinstance(data, list):
+        get_logger().warning(f"Variation history {path} is not a list; starting with an empty history.")
+        return []
+    return [h for h in data if isinstance(h, dict)]
 
 
 def _save_history(history: list[dict]):
-    HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
-    HISTORY_PATH.write_text(json.dumps(history, indent=2))
+    path = _history_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if _override_path() is None:
+        # Default path: the same plain write as before.
+        path.write_text(json.dumps(history, indent=2))
+        return
+    # Env var path (cloud): write to a temp file and swap it in, so a crash or
+    # error mid-write cannot leave a half-written history in place of the valid one.
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        tmp.write_text(json.dumps(history, indent=2))
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def choose_variation(niche: str, lookback: int = 3) -> dict:
