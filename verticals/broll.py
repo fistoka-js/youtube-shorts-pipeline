@@ -1,7 +1,9 @@
 """Pexels stock video b-roll (pool-first) + Pollinations image fallback + Ken Burns."""
 
 from pathlib import Path
+import json
 import re
+import tempfile
 
 import requests
 from PIL import Image
@@ -11,6 +13,18 @@ from .config import VIDEO_WIDTH, VIDEO_HEIGHT, run_cmd
 from .log import log
 from .retry import with_retry
 from .section_timing import compute_section_timings
+
+# Shorts only: a portrait clip wins over the best landscape clip when its CLIP
+# match score is within this margin of it (portrait clips lose less to the 9:16
+# crop). 0.02 is a small guess, not measured on real Pexels clips: large enough
+# to decide near-ties, small enough that a clearly weaker portrait clip still loses.
+PORTRAIT_PREFERENCE_MARGIN = 0.02
+
+# Shorts only: when cropping a landscape clip to 9:16, a left or right window
+# replaces the centre window only if its averaged CLIP score beats the centre
+# by at least this much. 0.01 is a small guess: smaller gaps are within the
+# noise of scoring only 3 frames, so the centre (the old behaviour) is kept.
+CROP_MIN_GAIN = 0.01
 
 
 def get_pexels_key() -> str:
@@ -159,9 +173,24 @@ def _build_subject_pool(subject: str, api_key: str, topic_context: str = "",
     return verified
 
 
+def _is_portrait(video: dict) -> bool:
+    """True when the Pexels video's downloaded file is strictly taller than it
+    is wide. Uses the same file entry as the download, and the same strict
+    height > width rule that _best_file_entry uses to prefer portrait files.
+    Square files do NOT count: a square clip loses width in the 9:16 crop, so
+    it gets no portrait bonus."""
+    entry = _best_file_entry(video) or {}
+    width = entry.get("width") or video.get("width")
+    height = entry.get("height") or video.get("height")
+    if not width or not height:
+        return False
+    return height > width
+
+
 def _best_pool_match(prompt_text: str, pool: list, used_ids: set,
                      min_duration: float = 0.0,
-                     score_out: dict | None = None) -> dict | None:
+                     score_out: dict | None = None,
+                     prefer_portrait: bool = False) -> dict | None:
     """Pick the best-matching clip from the verified pool for a prompt,
     using CLIP text-to-image similarity. Excludes already-used clips.
 
@@ -174,6 +203,12 @@ def _best_pool_match(prompt_text: str, pool: list, used_ids: set,
     score_out: optional dict. When given and a clip is picked, the CLIP score
     of that clip is stored in it under "score" (for the build report only).
     The choice itself is identical with or without it.
+
+    prefer_portrait: optional, default off (long-form does not use it). When
+    on (Shorts), portrait clips get a bonus of PORTRAIT_PREFERENCE_MARGIN when
+    ranking, so a portrait clip wins over the best landscape clip if it is
+    within that margin. If no portrait clip is that close, the best overall
+    clip still wins. score_out still holds the true CLIP score, not the bonus.
     """
     import torch
     available = [p for p in pool if p["video"].get("id") not in used_ids]
@@ -190,6 +225,13 @@ def _best_pool_match(prompt_text: str, pool: list, used_ids: set,
         score = (text_feat @ entry["image_embedding"].unsqueeze(1)).item()
         scored.append((score, entry))
     scored.sort(key=lambda x: x[0], reverse=True)
+
+    if prefer_portrait:
+        scored.sort(
+            key=lambda x: x[0] + (PORTRAIT_PREFERENCE_MARGIN
+                                  if _is_portrait(x[1]["video"]) else 0.0),
+            reverse=True,
+        )
 
     if min_duration > 0:
         # Consider the top 40% of candidates by similarity (a reasonable
@@ -291,20 +333,158 @@ def _search_pexels_video(
 
 # ── Download / fallback helpers ──────────────────────────────────────────
 
+def _horizontal_slack(src_w, src_h, out_w, out_h) -> bool:
+    """True when fitting the source to the output height cuts away width, i.e.
+    the source is wider than the output shape. Sources without this (e.g. 9:16
+    portrait) lose nothing sideways, so no crop choice is made for them."""
+    return src_w * out_h > src_h * out_w
+
+
+def _scaled_window_lefts(scaled_w: int, out_w: int) -> dict:
+    """Left edge of the three candidate windows (left, center, right) on the frame
+    as ffmpeg scales it to the output height (scaled_w pixels wide). Each window
+    is out_w wide: the same region that scale-then-crop keeps. The right window
+    is exactly flush with the right edge."""
+    right = scaled_w - out_w
+    return {"left": 0, "center": right // 2, "right": right}
+
+
+def _side_crop_x(left: int) -> int:
+    """Crop x for a side window, made even (keeps chroma aligned for yuv420p).
+    Left is never past the valid range, because it comes from _scaled_window_lefts."""
+    return left - (left % 2)
+
+
+def _score_crop_windows(frames: list, lefts: dict, out_w: int, out_h: int,
+                        prompt: str) -> dict:
+    """CLIP score of each window against the prompt, averaged over the frames.
+    The frames are already scaled to the output height, so each window is
+    out_w wide and the full frame tall. Same normalization as _best_pool_match
+    (text and image vectors unit length)."""
+    import torch
+    model, preprocess, tokenizer = _load_clip()
+    with torch.no_grad():
+        text_feat = model.encode_text(tokenizer([prompt]))
+        text_feat /= text_feat.norm(dim=-1, keepdim=True)
+    sides = list(lefts)
+    totals = {s: 0.0 for s in sides}
+    for frame in frames:
+        batch = torch.stack([
+            preprocess(frame.crop((lefts[s], 0, lefts[s] + out_w, out_h)))
+            for s in sides
+        ])
+        with torch.no_grad():
+            feats = model.encode_image(batch)
+            feats /= feats.norm(dim=-1, keepdim=True)
+            sims = (feats @ text_feat.T).squeeze(1).tolist()
+        for s, sim in zip(sides, sims):
+            totals[s] += float(sim)
+    return {s: totals[s] / len(frames) for s in sides}
+
+
+def _choose_crop(frames: list, out_w: int, out_h: int, prompt: str) -> dict:
+    """Pick the crop window. The centre is kept unless the best side window beats
+    it by at least CROP_MIN_GAIN. frames are scaled to the output height (see
+    _decide_crop). Returns the side, the crop x (None = centre, so the old
+    command is used), the offset fraction and both scores."""
+    scaled_w, scaled_h = frames[0].size
+    if scaled_h != out_h or scaled_w <= out_w:
+        raise ValueError(f"unexpected scaled frame size {scaled_w}x{scaled_h}")
+    lefts = _scaled_window_lefts(scaled_w, out_w)
+    scores = _score_crop_windows(frames, lefts, out_w, out_h, prompt)
+    center_score = scores["center"]
+    best = max(scores, key=lambda s: scores[s])
+    side = "center"
+    if best != "center" and scores[best] - center_score >= CROP_MIN_GAIN:
+        side = best
+    x = None if side == "center" else _side_crop_x(lefts[side])
+    return {
+        "side": side,
+        "x": x,
+        "crop_offset": {"left": 0.0, "center": 0.5, "right": 1.0}[side],
+        "center_score": center_score,
+        "chosen_score": scores[side],
+    }
+
+
+def _decide_crop(raw_path: Path, duration: float, out_w: int, out_h: int,
+                 prompt: str) -> dict | None:
+    """Full crop decision for one raw download. Returns the _choose_crop result,
+    or None when no decision is made (no horizontal slack, or any failure).
+    Failures are logged as warnings and never raised: the caller then uses the
+    plain centre crop. Temp frames live in a temp folder that is always removed."""
+    try:
+        probe = json.loads(run_cmd([
+            "ffprobe", "-v", "quiet", "-select_streams", "v:0",
+            "-show_entries", "stream=width,height:format=duration",
+            "-of", "json", str(raw_path),
+        ], capture=True).stdout)
+        src_w = int(probe["streams"][0]["width"])
+        src_h = int(probe["streams"][0]["height"])
+        native = float(probe["format"]["duration"])
+        if not _horizontal_slack(src_w, src_h, out_w, out_h):
+            return None
+        # Kept length = the part the -t duration keeps, or the whole clip if shorter.
+        kept = min(float(duration), native)
+        # The frames use the same scale filter as the final command, so their width
+        # is exactly the width ffmpeg will scale the clip to.
+        scale_vf = f"scale={out_w}:{out_h}:force_original_aspect_ratio=increase"
+        with tempfile.TemporaryDirectory(prefix="crop_frames_", dir=raw_path.parent) as work:
+            frames = []
+            for k, frac in enumerate((0.25, 0.5, 0.75)):
+                frame_path = Path(work) / f"frame_{k}.png"
+                run_cmd([
+                    "ffmpeg", "-ss", f"{kept * frac:.3f}", "-i", str(raw_path),
+                    "-vf", scale_vf, "-frames:v", "1", "-y", "-loglevel", "quiet",
+                    str(frame_path),
+                ])
+                with Image.open(frame_path) as im:
+                    frames.append(im.convert("RGB"))
+            return _choose_crop(frames, out_w, out_h, prompt)
+    except Exception as e:
+        # Some errors (e.g. run_cmd with -v quiet) carry no text, so name the type too.
+        reason = str(e) or "no details given"
+        log(f"WARNING: crop check skipped ({type(e).__name__}: {reason}), using the centre crop")
+        return None
+
+
 def _download_and_crop_video(url: str, out_path: Path, duration: float,
-                              width: int = VIDEO_WIDTH, height: int = VIDEO_HEIGHT) -> Path:
+                              width: int = VIDEO_WIDTH, height: int = VIDEO_HEIGHT,
+                              crop_prompt: str | None = None,
+                              crop_out: dict | None = None) -> Path:
     """Download a Pexels clip and crop/scale/trim to the target dimensions
     (portrait for Shorts by default, landscape for long-form when width/
-    height are passed explicitly)."""
+    height are passed explicitly).
+
+    crop_prompt: optional, default off (long-form does not use it). When given
+    (Shorts), a landscape source is cropped at the left, centre or right window
+    that best matches crop_prompt (see _decide_crop). Otherwise, or when the
+    centre wins, the command is the plain centre crop as before.
+    crop_out: optional dict. When a crop decision is made, it is filled with
+    crop_offset, crop_side, center_score and chosen_score (for the build report)."""
     tmp_path = out_path.with_suffix(".raw.mp4")
     r = requests.get(url, timeout=90, stream=True)
     r.raise_for_status()
     with open(tmp_path, "wb") as f:
         for chunk in r.iter_content(chunk_size=1 << 16):
             f.write(chunk)
+    crop_x = None
+    if crop_prompt is not None:
+        decision = _decide_crop(tmp_path, duration, width, height, crop_prompt)
+        if decision is not None:
+            crop_x = decision["x"]
+            if crop_out is not None:
+                crop_out.update(
+                    crop_offset=decision["crop_offset"],
+                    crop_side=decision["side"],
+                    center_score=decision["center_score"],
+                    chosen_score=decision["chosen_score"],
+                )
+    crop_expr = (f"crop={width}:{height}" if crop_x is None
+                 else f"crop={width}:{height}:{crop_x}:0")
     vf = (
         f"scale={width}:{height}:force_original_aspect_ratio=increase,"
-        f"crop={width}:{height}"
+        f"{crop_expr}"
     )
     run_cmd([
         "ffmpeg", "-i", str(tmp_path), "-t", str(duration),
@@ -339,9 +519,11 @@ def _generate_pollinations_image(prompt: str, out_path: Path) -> Path:
 
 
 def _record_clip(report_rows, *, slot, section, kind, source, out_w, out_h,
-                 video=None, clip_duration=None, clip_score=None) -> None:
+                 video=None, clip_duration=None, clip_score=None,
+                 crop=None) -> None:
     """Append one build-report row (see build_report.py). Does nothing when
-    report_rows is None, and never raises: the report must not change a build."""
+    report_rows is None, and never raises: the report must not change a build.
+    crop: optional dict from _download_and_crop_video's crop_out (crop fields)."""
     if report_rows is None:
         return
     try:
@@ -350,6 +532,7 @@ def _record_clip(report_rows, *, slot, section, kind, source, out_w, out_h,
             slot=slot, section=section, kind=kind, source=source,
             out_w=out_w, out_h=out_h, video=video, file_entry=entry,
             clip_duration=clip_duration, clip_score=clip_score,
+            crop=crop,
         )
     except Exception as e:
         log(f"  Build report could not measure slot {slot}: {e}")
@@ -400,7 +583,8 @@ def generate_broll(prompts: list, out_dir: Path, clip_duration: float = 4.0,
         # 1. Try pool (always, regardless of whether prompt mentions subject).
         if pool and not got_video:
             score_out = {}
-            match = _best_pool_match(prompt, pool, used_video_ids, score_out=score_out)
+            match = _best_pool_match(prompt, pool, used_video_ids, score_out=score_out,
+                                     prefer_portrait=True)
             if match:
                 video = match["video"]
                 link = _best_file_link(video)
@@ -409,12 +593,14 @@ def generate_broll(prompts: list, out_dir: Path, clip_duration: float = 4.0,
                     if vid_id is not None:
                         used_video_ids.add(vid_id)
                     out_path = out_dir / f"broll_{i}.mp4"
-                    _download_and_crop_video(link, out_path, clip_duration)
+                    crop_info = {}
+                    _download_and_crop_video(link, out_path, clip_duration,
+                                             crop_prompt=prompt, crop_out=crop_info)
                     frames.append({"path": out_path, "type": "video"})
                     _record_clip(report_rows, slot=i + 1, section=None, kind="video",
                                  source="pool", out_w=VIDEO_WIDTH, out_h=VIDEO_HEIGHT,
                                  video=video, clip_duration=clip_duration,
-                                 clip_score=score_out.get("score"))
+                                 clip_score=score_out.get("score"), crop=crop_info)
                     got_video = True
                     log(f"  Matched from pool: \"{prompt[:60]}\"")
 
@@ -431,12 +617,14 @@ def generate_broll(prompts: list, out_dir: Path, clip_duration: float = 4.0,
                     if vid_id is not None:
                         used_video_ids.add(vid_id)
                     out_path = out_dir / f"broll_{i}.mp4"
-                    _download_and_crop_video(url, out_path, clip_duration)
+                    crop_info = {}
+                    _download_and_crop_video(url, out_path, clip_duration,
+                                             crop_prompt=prompt, crop_out=crop_info)
                     frames.append({"path": out_path, "type": "video"})
                     _record_clip(report_rows, slot=i + 1, section=None, kind="video",
                                  source="last_resort_search", out_w=VIDEO_WIDTH,
                                  out_h=VIDEO_HEIGHT, video=picked.get("video"),
-                                 clip_duration=clip_duration)
+                                 clip_duration=clip_duration, crop=crop_info)
                     got_video = True
                     log(f"  Found via individual search: \"{prompt[:60]}\"")
             except Exception as e:

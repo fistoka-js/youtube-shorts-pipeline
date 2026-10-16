@@ -305,6 +305,109 @@ class TestFormatTable(_Quiet):
         self.assertEqual(len(messages), 1 + 2 + 1)
 
 
+class TestCropColumn(_Quiet):
+    """The Crop column: "side centre_score>chosen_score" with 2 decimals, or "-"."""
+
+    def _crop_row(self, slot, side, center, chosen):
+        return R.make_clip_row(
+            slot=slot, section=None, kind="video", source="pool", out_w=1080, out_h=1920,
+            video=V_LANDSCAPE_HD, file_entry=V_LANDSCAPE_HD["video_files"][1], clip_duration=4.0,
+            clip_score=0.25,
+            crop={"crop_offset": {"left": 0.0, "center": 0.5, "right": 1.0}.get(side),
+                  "crop_side": side, "center_score": center, "chosen_score": chosen})
+
+    def _line_for(self, row):
+        return R.format_table([row])[2]
+
+    def test_header_has_crop_after_score_and_before_source(self):
+        header = R.format_table([])[0]
+        self.assertLess(header.index("Score"), header.index("Crop"))
+        self.assertLess(header.index("Crop"), header.index("Source"))
+
+    def test_right_window_cell(self):
+        self.assertIn("right 0.29>0.31", self._line_for(self._crop_row(1, "right", 0.29, 0.31)))
+
+    def test_left_window_cell(self):
+        self.assertIn("left 0.20>0.25", self._line_for(self._crop_row(1, "left", 0.2, 0.25)))
+
+    def test_centre_kept_shows_equal_scores(self):
+        self.assertIn("center 0.30>0.30", self._line_for(self._crop_row(1, "center", 0.3, 0.3)))
+
+    def test_two_decimals_are_rounded_not_truncated(self):
+        self.assertIn("right 0.29>0.31", self._line_for(self._crop_row(1, "right", 0.2949, 0.3149)))
+
+    def test_null_crop_fields_show_dash(self):
+        portrait = R.make_clip_row(slot=1, section=None, kind="video", source="pool", out_w=1080,
+                                   out_h=1920, video=V_PORTRAIT, file_entry=V_PORTRAIT["video_files"][0],
+                                   clip_duration=4.0, clip_score=0.25)
+        image = R.empty_row(2, None, "image", "image_fallback")
+        for row in (portrait, image, {}):
+            self.assertEqual(R._crop_cell(row), "-")
+
+    def test_missing_or_bad_values_show_dash_and_never_raise(self):
+        bad_rows = [
+            {"crop_side": "right", "center_score": None, "chosen_score": 0.3},
+            {"crop_side": "right", "center_score": 0.3},
+            {"crop_side": "right", "center_score": "bad", "chosen_score": 0.3},
+            {"crop_side": "right", "center_score": float("nan"), "chosen_score": 0.3},
+            {"crop_side": "right", "center_score": 0.3, "chosen_score": {}},
+            {"crop_side": "diagonal", "center_score": 0.3, "chosen_score": 0.4},
+            {"crop_side": ["right"], "center_score": 0.3, "chosen_score": 0.4},
+            {"crop_side": None, "center_score": 0.3, "chosen_score": 0.4},
+        ]
+        for row in bad_rows:
+            self.assertEqual(R._crop_cell(row), "-", row)
+        lines = R.format_table(bad_rows + ["junk", None])
+        self.assertEqual(len(lines), 2 + len(bad_rows) + 2)
+
+    def test_crop_cell_fits_its_column_width(self):
+        # The longest cell, "center 0.30>0.30" (16 chars), must not be cut off.
+        line = self._line_for(self._crop_row(1, "center", 0.3, 0.3))
+        self.assertIn("center 0.30>0.30", line)
+        self.assertEqual(R._COLUMNS[8], ("Crop", 19))
+
+    def test_negative_scores_are_shown_in_full(self):
+        line = self._line_for(self._crop_row(1, "center", -0.05, -0.05))
+        self.assertIn("center -0.05>-0.05", line)
+        self.assertEqual(R._crop_cell({"crop_side": "center", "center_score": -0.05,
+                                       "chosen_score": -0.05}), "center -0.05>-0.05")
+
+    def test_longest_possible_cell_is_not_truncated(self):
+        # CLIP similarities lie in -1..1, so "center -1.00>-1.00" is the longest cell (18 chars).
+        cell = R._crop_cell({"crop_side": "center", "center_score": -1.0, "chosen_score": -1.0})
+        self.assertEqual(cell, "center -1.00>-1.00")
+        self.assertEqual(len(cell), 18)
+        self.assertIn("center -1.00>-1.00", self._line_for(self._crop_row(1, "center", -1.0, -1.0)))
+
+    def test_mixed_sign_cell_is_not_truncated(self):
+        line = self._line_for(self._crop_row(1, "left", -0.10, 0.25))
+        self.assertIn("left -0.10>0.25", line)
+        # The Source column after it still starts at the same place as in other rows.
+        self.assertIn("pool", line)
+
+    def test_every_cell_width_fits_its_column(self):
+        # A cell is cut to width - 1, so it must be no longer than that to keep every digit.
+        for side in R._CROP_SIDES:
+            for value in (1.0, -1.0, 0.0, -0.05, 0.25, -0.999):
+                cell = R._crop_cell({"crop_side": side, "center_score": value, "chosen_score": value})
+                self.assertLessEqual(len(cell), R._COLUMNS[8][1] - 1, cell)
+                self.assertNotEqual(cell, "-")
+
+    def test_other_cells_are_unchanged_by_the_new_column(self):
+        row = self._crop_row(1, "right", 0.29, 0.31)
+        cells = R._row_cells(row)
+        self.assertEqual(len(cells), len(R._COLUMNS))
+        self.assertEqual(cells[7], "0.250")          # Score
+        self.assertEqual(cells[8], "right 0.29>0.31")  # Crop
+        self.assertEqual(cells[9], "pool")           # Source
+        self.assertEqual(cells[-1], "-")             # Loop (not yet known)
+
+    def test_json_row_keeps_full_numbers(self):
+        row = self._crop_row(1, "right", 0.2949, 0.3149)
+        self.assertEqual(row["center_score"], 0.2949)
+        self.assertEqual(row["chosen_score"], 0.3149)
+
+
 # ── Saving ───────────────────────────────────────────────────────────────────
 
 class TestSaving(_Quiet):
@@ -444,7 +547,8 @@ class TestGenerateBrollRecording(_Quiet):
     """Runs generate_broll and generate_broll_long_form with every outside call faked."""
 
     def _patches(self, downloads, pool=None, search_videos=None, pollinations_ok=False):
-        def fake_download(url, out_path, duration, width=B.VIDEO_WIDTH, height=B.VIDEO_HEIGHT):
+        def fake_download(url, out_path, duration, width=B.VIDEO_WIDTH, height=B.VIDEO_HEIGHT,
+                          **kwargs):
             downloads.append((url, Path(out_path).name, duration, width, height))
             return Path(out_path)
 

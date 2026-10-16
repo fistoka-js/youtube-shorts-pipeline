@@ -11,6 +11,7 @@ source their own b-roll, so a shared file would overwrite the other language.
 """
 
 import json
+import math
 import os
 from collections import Counter
 from datetime import datetime
@@ -25,8 +26,14 @@ LOOP_TOLERANCE_S = 0.05
 # (column title, column width) for the printed table.
 _COLUMNS = [
     ("Slot", 5), ("Section", 13), ("Pexels", 10), ("Src WxH", 12), ("Orient", 10),
-    ("NatDur", 8), ("Kept", 8), ("Score", 7), ("Source", 19), ("SlotDur", 9), ("Loop", 5),
+    ("NatDur", 8), ("Kept", 8), ("Score", 7), ("Crop", 19), ("Source", 19), ("SlotDur", 9),
+    ("Loop", 5),
 ]
+
+# The sides a crop decision can name (see broll._choose_crop).
+_CROP_SIDES = ("left", "center", "right")
+# The Crop column is 19 wide: format_table cuts cells to width - 1 = 18 characters,
+# which fits the longest possible cell, "center -1.00>-1.00" (CLIP scores lie in -1..1).
 
 
 def orientation_of(width, height) -> str | None:
@@ -108,12 +115,22 @@ def empty_row(slot, section, kind, source) -> dict:
         "clip_duration": None,
         "slot_duration": None,
         "loop": None,
+        # Shorts crop choice (null when no decision was made: portrait sources,
+        # images, long-form). Pool and last-resort search clips both get a decision
+        # when they are landscape. crop_offset: 0.0 = left window,
+        # 0.5 = centre, 1.0 = right window (the share of the sideways slack cut
+        # from the left). crop_side is the same choice as a word. center_score is
+        # the centre window's CLIP score, chosen_score the chosen window's.
+        "crop_offset": None,
+        "crop_side": None,
+        "center_score": None,
+        "chosen_score": None,
     }
 
 
 def make_clip_row(*, slot, section, kind, source, out_w, out_h,
                   video=None, file_entry=None, clip_duration=None,
-                  clip_score=None) -> dict:
+                  clip_score=None, crop=None) -> dict:
     """One build-report row for one slot.
 
     kind: "video" (a Pexels clip) or "image" (Pollinations still or solid colour).
@@ -125,11 +142,20 @@ def make_clip_row(*, slot, section, kind, source, out_w, out_h,
         _best_file_link picks). Its "width" and "height" are the source size. If
         the entry lacks them, the video's top-level width/height are used.
     slot_duration and loop are filled in later by apply_slot_durations, after
-    assembly, because only assembly knows how long each slot really is."""
+    assembly, because only assembly knows how long each slot really is.
+    crop: optional dict with crop_offset, crop_side, center_score and chosen_score
+        (from the Shorts crop decision). Missing keys stay null."""
     row = empty_row(slot, section, kind, source)
     row["clip_score"] = clip_score
     if kind != "video":
         return row
+    crop = crop or {}
+    row.update(
+        crop_offset=crop.get("crop_offset"),
+        crop_side=crop.get("crop_side"),
+        center_score=crop.get("center_score"),
+        chosen_score=crop.get("chosen_score"),
+    )
     video = video or {}
     file_entry = file_entry or {}
     width = file_entry.get("width") or video.get("width")
@@ -220,6 +246,25 @@ def _cell(value, fmt):
         return "?"
 
 
+def _crop_cell(row: dict) -> str:
+    """The Shorts crop choice as "side centre_score>chosen_score", e.g.
+    "right 0.29>0.31" (2 decimals). "center 0.30>0.30" when the centre was kept.
+    "-" when there was no crop decision (portrait, image, long-form) or any field
+    is missing or bad, so this never raises."""
+    try:
+        side = row.get("crop_side")
+        center = row.get("center_score")
+        chosen = row.get("chosen_score")
+        if side not in _CROP_SIDES or center is None or chosen is None:
+            return "-"
+        center, chosen = float(center), float(chosen)
+        if not (math.isfinite(center) and math.isfinite(chosen)):
+            return "-"
+        return f"{side} {center:.2f}>{chosen:.2f}"
+    except (AttributeError, TypeError, ValueError):
+        return "-"
+
+
 def _row_cells(row: dict) -> list:
     width, height = row.get("source_width"), row.get("source_height")
     size = "-" if width is None or height is None else f"{width}x{height}"
@@ -233,6 +278,7 @@ def _row_cells(row: dict) -> list:
         _cell(row.get("native_duration"), lambda d: f"{float(d):.1f}s"),
         _cell(row.get("kept_fraction"), lambda k: f"{float(k) * 100:.1f}%"),
         _cell(row.get("clip_score"), lambda s: f"{float(s):.3f}"),
+        _crop_cell(row),
         _cell(row.get("source"), str),
         _cell(row.get("slot_duration"), lambda d: f"{float(d):.2f}s"),
         "-" if loop is None else ("yes" if loop else "no"),
