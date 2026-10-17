@@ -1,0 +1,9 @@
+[
+  {
+    "niche": "science",
+    "intro_style": "scene-setting: open by describing a vivid, specific moment or scenario",
+    "narrative_structure": "process-walkthrough: explain a mechanism or system step by step, in the order it actually operates",
+    "outro_treatment": "reflective wrap-up connecting the specific fact to a bigger idea",
+    "visual_treatment": "diagram-and-data: lean into the upper end of the allowed abstract/diagram prompt ratio - more anatomical diagrams, data visualizations, and explanatory graphics than usual"
+  }
+]
