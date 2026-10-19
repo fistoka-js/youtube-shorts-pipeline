@@ -23,6 +23,10 @@ jobs:
     steps:
       - name: Check out repo
         uses: actions/checkout@v4
+        with:
+          # Check out the branch head when this job starts, not the commit that
+          # triggered the run, so a run waiting in the queue sees earlier queue/ commits.
+          ref: ${{ github.ref_name }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -67,4 +71,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add queue/
           git diff --staged --quiet || git commit -m "Auto: queue state update from workflow run"
+          # Rebase onto the branch head first, in case another run pushed while this one was working.
+          git pull --rebase origin ${{ github.ref_name }}
+          # Push the queue commit to the branch.
           git push

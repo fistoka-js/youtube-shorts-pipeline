@@ -477,6 +477,20 @@ class TestWorkflowFile(unittest.TestCase):
         self.assertIn("git add queue/", commit["run"])
         self.assertIn("git push", commit["run"])
 
+    def test_checkout_uses_branch_ref(self):
+        steps = {s.get("name"): s for s in self.data["jobs"]["produce"]["steps"]}
+        checkout = steps["Check out repo"]
+        self.assertEqual(checkout["with"]["ref"], "${{ github.ref_name }}")
+
+    def test_commit_step_pulls_rebase_between_commit_and_push(self):
+        steps = {s.get("name"): s for s in self.data["jobs"]["produce"]["steps"]}
+        lines = [line.strip() for line in steps["Commit queue state changes"]["run"].splitlines()]
+        pull = "git pull --rebase origin ${{ github.ref_name }}"
+        self.assertIn(pull, lines)
+        commit_index = next(i for i, line in enumerate(lines) if "git commit" in line)
+        self.assertLess(commit_index, lines.index(pull))
+        self.assertLess(lines.index(pull), lines.index("git push"))
+
 
 if __name__ == "__main__":
     unittest.main()
