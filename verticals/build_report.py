@@ -414,3 +414,21 @@ def record_assembly(report_path, slot_durations) -> None:
         write_report(path, data)
     except Exception as e:
         log(f"WARNING: b-roll build report not updated after assembly: {e}")
+
+
+def save_thumbnail(report_path, details: dict) -> None:
+    """Called after the thumbnail step (upload command). Adds the thumbnail details
+    (search words, candidates, photo id, CLIP score, fallback) under a "thumbnail"
+    key in the saved report. Logs and does nothing else when no report exists or
+    when the file cannot be updated."""
+    try:
+        path = Path(report_path)
+        if not path.exists():
+            log(f"No b-roll build report at {path.name}, so thumbnail details are not added to it")
+            return
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["thumbnail"] = dict(details)
+        data["written_at"] = datetime.now().isoformat(timespec="seconds")
+        write_report(path, data)
+    except Exception as e:
+        log(f"WARNING: build report not updated with thumbnail details: {e}")

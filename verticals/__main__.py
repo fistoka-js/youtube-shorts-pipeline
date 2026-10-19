@@ -509,8 +509,13 @@ def cmd_upload(args):
     thumb_path = None
     if force or not state.is_done("thumbnail"):
         try:
-            thumb_path = generate_thumbnail(draft, MEDIA_DIR)
-            state.complete_stage("thumbnail", {"path": str(thumb_path)})
+            thumb_details = {}
+            thumb_path = generate_thumbnail(draft, MEDIA_DIR, details=thumb_details)
+            state.complete_stage("thumbnail", {"path": str(thumb_path), **thumb_details})
+            from . import build_report
+            build_report.save_thumbnail(
+                build_report.report_path_for(draft_path, draft.get("job_id", "unknown"), lang),
+                thumb_details)
         except Exception as e:
             log(f"Thumbnail generation failed: {e} — uploading without thumbnail")
     else:
