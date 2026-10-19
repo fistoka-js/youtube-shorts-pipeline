@@ -126,7 +126,7 @@ RULES:
 Output JSON exactly:
 {{
   "script": "...",
-  "broll_subject": "the literal main visual subject in 1-2 words (e.g. octopus, cat, volcano, black hole)",
+  "broll_subject": "a 2-4 word concrete visual search phrase for the main subject, describing what the camera would actually see (e.g. octopus swimming underwater, goosebumps on skin, erupting volcano at night, black hole in space). Never a single word on its own: if the topic's main word could also mean something else (a book, film, brand, costume or theme), add a visual detail to it, as in goosebumps on skin rather than goosebumps",
   "broll_prompts": ["prompt for scene 1", "prompt for scene 2", "... 15-20 total"],
   "youtube_title": "...",
   "youtube_description": "...",
