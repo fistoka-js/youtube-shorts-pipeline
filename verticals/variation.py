@@ -106,25 +106,32 @@ def _save_history(history: list[dict]):
 def choose_variation(niche: str, lookback: int = 3) -> dict:
     """Pick an intro style, narrative structure, outro treatment, and visual
     treatment that weren't used in the last `lookback` videos for this
-    niche - falls back to picking from the full list if everything's been
-    used recently (e.g. lookback exceeds the number of available options)."""
+    niche. If every option was used recently (e.g. the pool is smaller than
+    lookback), pick from everything except the most recent video's choice for
+    that field, so consecutive videos never share it. If the pool has only one
+    option, that option is used. With no recent video, pick from the full list."""
     history = _load_history()
     recent = [h for h in history if h.get("niche") == niche][-lookback:]
+    last = recent[-1] if recent else {}
 
     recent_intros = {h.get("intro_style") for h in recent}
     recent_structures = {h.get("narrative_structure") for h in recent}
     recent_outros = {h.get("outro_treatment") for h in recent}
     recent_visuals = {h.get("visual_treatment") for h in recent}
 
-    def pick(options: list[str], recently_used: set[str]) -> str:
+    def pick(options: list[str], recently_used: set[str], field: str) -> str:
         available = [o for o in options if o not in recently_used]
-        return random.choice(available or options)
+        if available:
+            return random.choice(available)
+        # Everything was used recently: avoid only the most recent video's value.
+        not_last = [o for o in options if o != last.get(field)]
+        return random.choice(not_last or options)
 
     return {
-        "intro_style": pick(INTRO_STYLES, recent_intros),
-        "narrative_structure": pick(NARRATIVE_STRUCTURES, recent_structures),
-        "outro_treatment": pick(OUTRO_TREATMENTS, recent_outros),
-        "visual_treatment": pick(VISUAL_TREATMENTS, recent_visuals),
+        "intro_style": pick(INTRO_STYLES, recent_intros, "intro_style"),
+        "narrative_structure": pick(NARRATIVE_STRUCTURES, recent_structures, "narrative_structure"),
+        "outro_treatment": pick(OUTRO_TREATMENTS, recent_outros, "outro_treatment"),
+        "visual_treatment": pick(VISUAL_TREATMENTS, recent_visuals, "visual_treatment"),
     }
 
 

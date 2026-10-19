@@ -218,8 +218,9 @@ class TestAvoidsRecentChoices(_HistoryTestCase):
         """With three recent videos in the same niche, the next choice must
         not reuse the intro/structure/outro options those three videos used,
         since each list has spare options. VISUAL_TREATMENTS has only three
-        options, so all of them are recent and the current fallback (pick from
-        the full list) applies. Checked over many seeds."""
+        options, so all of them are recent and the fallback applies: the visual
+        choice must not equal the most recent video's visual treatment.
+        Checked over many seeds."""
         recent = [
             {"niche": "science", "intro_style": V.INTRO_STYLES[0],
              "narrative_structure": V.NARRATIVE_STRUCTURES[0],
@@ -244,8 +245,9 @@ class TestAvoidsRecentChoices(_HistoryTestCase):
             self.assertNotIn(choice["intro_style"], {h["intro_style"] for h in recent})
             self.assertNotIn(choice["narrative_structure"], {h["narrative_structure"] for h in recent})
             self.assertNotIn(choice["outro_treatment"], {h["outro_treatment"] for h in recent})
-            # All three visual options are recent, so any visual option may be picked.
-            self.assertIn(choice["visual_treatment"], V.VISUAL_TREATMENTS)
+            # All three visual options are recent, so the fallback applies and
+            # the choice must differ from the most recent video's visual treatment.
+            self.assertNotEqual(choice["visual_treatment"], recent[-1]["visual_treatment"])
 
     def test_other_niches_do_not_count(self):
         """Entries for a different niche must not block options for this niche."""
@@ -258,8 +260,9 @@ class TestAvoidsRecentChoices(_HistoryTestCase):
         # Nothing for "science" is recent, so any option is allowed.
         self.assertIn(choice["intro_style"], V.INTRO_STYLES)
 
-    def test_falls_back_to_full_list_when_all_recently_used(self):
-        """If every option was used recently, the full list is used instead of crashing."""
+    def test_falls_back_to_all_but_most_recent_when_all_recently_used(self):
+        """If every option was used recently, each field falls back to everything
+        except the most recent video's value, and nothing crashes. Checked over many seeds."""
         recent = [
             {"niche": "science", "intro_style": s, "narrative_structure": n,
              "outro_treatment": o, "visual_treatment": v}
@@ -269,9 +272,48 @@ class TestAvoidsRecentChoices(_HistoryTestCase):
         path = self.tmp / "variation_history.json"
         path.write_text(json.dumps(recent))
         self.set_env_path(path)
-        random.seed(7)
-        choice = V.choose_variation("science", lookback=len(recent))
-        self.assertIn(choice["intro_style"], V.INTRO_STYLES)
+        for seed in range(200):
+            random.seed(seed)
+            choice = V.choose_variation("science", lookback=len(recent))
+            for field in ("intro_style", "narrative_structure", "outro_treatment", "visual_treatment"):
+                self.assertNotEqual(choice[field], recent[-1][field])
+
+    def test_visual_never_repeats_most_recent_when_all_three_recent(self):
+        """With all three visual options in the recent history, the visual choice
+        never equals the most recent video's, and both other options do come up."""
+        recent = [
+            {"niche": "science", "intro_style": V.INTRO_STYLES[0],
+             "narrative_structure": V.NARRATIVE_STRUCTURES[0],
+             "outro_treatment": V.OUTRO_TREATMENTS[0],
+             "visual_treatment": v}
+            for v in (V.VISUAL_TREATMENTS[1], V.VISUAL_TREATMENTS[2], V.VISUAL_TREATMENTS[0])
+        ]
+        path = self.tmp / "variation_history.json"
+        path.write_text(json.dumps(recent))
+        self.set_env_path(path)
+        seen = set()
+        for seed in range(200):
+            random.seed(seed)
+            choice = V.choose_variation("science", lookback=3)
+            self.assertNotEqual(choice["visual_treatment"], V.VISUAL_TREATMENTS[0])
+            seen.add(choice["visual_treatment"])
+        self.assertEqual(seen, {V.VISUAL_TREATMENTS[1], V.VISUAL_TREATMENTS[2]})
+
+    def test_one_option_pool_uses_that_option(self):
+        """If a pool has only one option and it was used recently, that option is
+        used instead of crashing (excluding it would leave nothing)."""
+        only = "only visual option"
+        recent = [{"niche": "science", "intro_style": V.INTRO_STYLES[0],
+                   "narrative_structure": V.NARRATIVE_STRUCTURES[0],
+                   "outro_treatment": V.OUTRO_TREATMENTS[0],
+                   "visual_treatment": only}]
+        path = self.tmp / "variation_history.json"
+        path.write_text(json.dumps(recent))
+        self.set_env_path(path)
+        random.seed(11)
+        with mock.patch.object(V, "VISUAL_TREATMENTS", [only]):
+            choice = V.choose_variation("science", lookback=3)
+        self.assertEqual(choice["visual_treatment"], only)
 
 
 class TestAtomicWrite(_HistoryTestCase):
