@@ -19,5 +19,12 @@
     "narrative_structure": "what-if: explore a hypothetical framing throughout (what if this trait didn't exist, etc.)",
     "outro_treatment": "direct question to the audience inviting a comment",
     "visual_treatment": "stock-footage-led: maximize real subject footage, keep abstract/diagram prompts to the bare minimum needed"
+  },
+  {
+    "niche": "science",
+    "intro_style": "cold-open curiosity gap: state the most surprising fact immediately, no setup",
+    "narrative_structure": "chronological: walk through how/why something developed over time, in order",
+    "outro_treatment": "forward-looking teaser about a related unanswered question",
+    "visual_treatment": "stock-footage-led: maximize real subject footage, keep abstract/diagram prompts to the bare minimum needed"
   }
 ]
