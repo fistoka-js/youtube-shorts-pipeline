@@ -402,6 +402,18 @@ Note: these GitHub web-editor (pencil icon) steps have not been tested yet.
 
 Stuck topics never expire automatically. They stay in `queue/in-progress/` until you move them.
 
+## Cloud Install Pins
+
+The cloud workflow installs from `requirements.txt` and then `constraints-ci.txt`. That file lists the exact version of every package from the last green cloud run, so each cloud run installs the same versions. Local installs do not use it. They keep the version ranges in `requirements.txt`.
+
+To update one pin on purpose:
+
+1. Change the version on that package's line in `constraints-ci.txt`.
+2. Run the "Produce video from queue" workflow once. **Warning:** this is not a test run. It produces and uploads a real video from the next topic in the queue, so only run it when you are ready for that video to go up.
+3. Keep the change only if that run is green. If it fails, put the old version back.
+
+When a package is added or changed in `requirements.txt`, the test named `test_every_requirement_has_a_pin` fails until that package has a line in `constraints-ci.txt`. Add the line as `name==version` in alphabetical order. Then update the expected count `EXPECTED_ENTRIES` in `tests/test_ci_pins.py` to the new number of lines.
+
 ## Testing
 
 ```bash
