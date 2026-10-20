@@ -62,7 +62,11 @@ jobs:
           "
 
       - name: Run queue orchestrator
-        run: python run.py
+        run: |
+          # run.py commits a claim on the queue file before uploading, so it needs a git identity.
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          python run.py
 
       - name: Commit queue state changes
         if: always()

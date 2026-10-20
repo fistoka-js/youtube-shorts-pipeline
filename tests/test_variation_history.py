@@ -524,6 +524,18 @@ class TestWorkflowFile(unittest.TestCase):
         checkout = steps["Check out repo"]
         self.assertEqual(checkout["with"]["ref"], "${{ github.ref_name }}")
 
+    def test_orchestrator_sets_git_identity_before_run_py(self):
+        # run.py commits a queue claim before uploading, so the identity must be set first.
+        steps = {s.get("name"): s for s in self.data["jobs"]["produce"]["steps"]}
+        lines = [line.strip() for line in steps["Run queue orchestrator"]["run"].splitlines()]
+        name_line = 'git config user.name "github-actions[bot]"'
+        email_line = 'git config user.email "github-actions[bot]@users.noreply.github.com"'
+        self.assertIn(name_line, lines)
+        self.assertIn(email_line, lines)
+        self.assertIn("python run.py", lines)
+        self.assertLess(lines.index(name_line), lines.index("python run.py"))
+        self.assertLess(lines.index(email_line), lines.index("python run.py"))
+
     def test_commit_step_pulls_rebase_between_commit_and_push(self):
         steps = {s.get("name"): s for s in self.data["jobs"]["produce"]["steps"]}
         lines = [line.strip() for line in steps["Commit queue state changes"]["run"].splitlines()]

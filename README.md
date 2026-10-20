@@ -388,6 +388,20 @@ verticals/
 └── requirements.txt
 ```
 
+## If a Topic Is Stuck in queue/in-progress/
+
+A topic file in `queue/in-progress/` means a run claimed the topic around the time it started the YouTube upload. That run either started the upload or stopped just before it, so check YouTube Studio to see whether a video went live.
+
+1. Open YouTube Studio, go to **Content**, and look for a video about that topic, uploaded around the time of that run. The video title is written automatically, so it won't match the wording of the topic file. Look at the subject and the upload date and time. Uploads are set to private, so check the private videos too.
+2. If the video is there, move the file to `queue/done/`.
+3. If the video is not there, move the file back to `queue/pending/` so it is tried again.
+
+To move a file without a computer setup, on github.com open the file in `queue/in-progress/`, click the pencil (edit) icon, and change the folder part of the file name box from `queue/in-progress/` to `queue/done/` (or `queue/pending/`). Then click the green **Commit changes** button.
+
+Note: these GitHub web-editor (pencil icon) steps have not been tested yet.
+
+Stuck topics never expire automatically. They stay in `queue/in-progress/` until you move them.
+
 ## Testing
 
 ```bash
