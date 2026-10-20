@@ -7,7 +7,68 @@ from .log import log
 from .retry import with_retry
 
 
-@with_retry(max_retries=2, base_delay=5.0)
+class UploadResponseError(Exception):
+    """YouTube's reply to the upload had no video id. The video may already exist in
+    YouTube Studio, so this is never retried: a retry could upload it a second time."""
+
+
+def _video_id_from_response(response) -> str:
+    video_id = response.get("id") if isinstance(response, dict) else None
+    if not isinstance(video_id, str) or not video_id.strip():
+        raise UploadResponseError(
+            "YouTube's reply to the upload had no video id. The video may already exist "
+            "in YouTube Studio. Check Studio (including private videos) before running "
+            "this topic again."
+        )
+    return video_id
+
+
+def _log_quietly(message: str) -> None:
+    """Logs a message. A logging failure must never fail an upload that already happened."""
+    try:
+        log(message)
+    except Exception:
+        pass
+
+
+def _finish_after_insert(youtube, video_id: str, srt_path: Path, lang: str, thumbnail_path: Path) -> None:
+    """Captions and thumbnail, run after the video exists. Nothing here may raise,
+    because an error would make with_retry upload the video again."""
+    from googleapiclient.http import MediaFileUpload
+
+    try:
+        if srt_path and srt_path.exists():
+            try:
+                youtube.captions().insert(
+                    part="snippet",
+                    body={
+                        "snippet": {
+                            "videoId": video_id,
+                            "language": lang,
+                            "name": lang.upper(),
+                            "isDraft": False,
+                        }
+                    },
+                    media_body=MediaFileUpload(str(srt_path), mimetype="application/octet-stream"),
+                ).execute()
+                log("Captions uploaded.")
+            except Exception as e:
+                log(f"Caption upload failed: {e}")
+
+        if thumbnail_path and thumbnail_path.exists():
+            try:
+                youtube.thumbnails().set(
+                    videoId=video_id,
+                    media_body=MediaFileUpload(str(thumbnail_path), mimetype="image/png"),
+                ).execute()
+                log("Thumbnail uploaded.")
+            except Exception as e:
+                log(f"Thumbnail upload failed: {e}")
+    except Exception as e:
+        _log_quietly(f"Post-upload step failed, but the video is uploaded: {e}")
+
+
+@with_retry(max_retries=2, base_delay=5.0, no_retry=(UploadResponseError,))
 def upload_to_youtube(
     video_path: Path,
     draft: dict,
@@ -81,38 +142,10 @@ def upload_to_youtube(
         if status:
             log(f"Upload progress: {int(status.progress() * 100)}%")
 
-    video_id = response["id"]
+    # The video now exists on YouTube. Nothing below may start another insert.
+    video_id = _video_id_from_response(response)
     url = f"https://youtu.be/{video_id}"
-    log(f"Uploaded: {url}")
+    _log_quietly(f"Uploaded: {url}")
 
-    # Upload SRT if available
-    if srt_path and srt_path.exists():
-        try:
-            youtube.captions().insert(
-                part="snippet",
-                body={
-                    "snippet": {
-                        "videoId": video_id,
-                        "language": lang,
-                        "name": lang.upper(),
-                        "isDraft": False,
-                    }
-                },
-                media_body=MediaFileUpload(str(srt_path), mimetype="application/octet-stream"),
-            ).execute()
-            log("Captions uploaded.")
-        except Exception as e:
-            log(f"Caption upload failed: {e}")
-
-    # Upload thumbnail if available
-    if thumbnail_path and thumbnail_path.exists():
-        try:
-            youtube.thumbnails().set(
-                videoId=video_id,
-                media_body=MediaFileUpload(str(thumbnail_path), mimetype="image/png"),
-            ).execute()
-            log("Thumbnail uploaded.")
-        except Exception as e:
-            log(f"Thumbnail upload failed: {e}")
-
+    _finish_after_insert(youtube, video_id, srt_path, lang, thumbnail_path)
     return url

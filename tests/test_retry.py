@@ -68,3 +68,36 @@ class TestWithRetry:
             pass
 
         assert my_function.__name__ == "my_function"
+
+    @patch("verticals.retry.time.sleep")
+    def test_no_retry_exception_is_raised_at_once(self, mock_sleep):
+        class StopNow(Exception):
+            pass
+
+        call_count = 0
+
+        @with_retry(max_retries=3, base_delay=0.01, no_retry=(StopNow,))
+        def stops_at_once():
+            nonlocal call_count
+            call_count += 1
+            raise StopNow("made up")
+
+        with pytest.raises(StopNow):
+            stops_at_once()
+        assert call_count == 1
+        mock_sleep.assert_not_called()
+
+    @patch("verticals.retry.time.sleep")
+    def test_exception_not_in_no_retry_is_still_retried(self, mock_sleep):
+        call_count = 0
+
+        @with_retry(max_retries=2, base_delay=0.01, no_retry=(KeyError,))
+        def fails_with_value_error():
+            nonlocal call_count
+            call_count += 1
+            raise ValueError("made up")
+
+        with pytest.raises(ValueError):
+            fails_with_value_error()
+        assert call_count == 3
+        assert mock_sleep.call_count == 2
