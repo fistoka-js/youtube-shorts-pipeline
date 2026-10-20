@@ -33,5 +33,12 @@
     "narrative_structure": "myth-busting: structure around correcting a series of common misconceptions",
     "outro_treatment": "call-back to the video's opening hook, resolving it",
     "visual_treatment": "diagram-and-data: lean into the upper end of the allowed abstract/diagram prompt ratio - more anatomical diagrams, data visualizations, and explanatory graphics than usual"
+  },
+  {
+    "niche": "science",
+    "intro_style": "myth-busting: open by stating a common belief, then say it's wrong",
+    "narrative_structure": "question-led: structure the whole video as a chain of questions, each answered before raising the next",
+    "outro_treatment": "reflective wrap-up connecting the specific fact to a bigger idea",
+    "visual_treatment": "still-image-with-motion: allow more still-photo-style prompts (landscapes, close-ups, portraits) that work well with Ken Burns pans/zooms, alongside video clips"
   }
 ]
