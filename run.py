@@ -12,6 +12,7 @@ nothing is uploaded and the file goes back to queue/pending/. Local runs
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -31,9 +32,18 @@ class ClaimUndoError(Exception):
     topic may not be back in queue/pending/, so the normal message must not be used."""
 
 
+def _natural_key(name: str):
+    """Sort key for file names: digit runs compare as numbers, text as lower-case text.
+    Splitting on digits gives text at even positions and numbers at odd positions, so
+    two keys always compare the same types at each position."""
+    parts = re.split(r"(\d+)", name.lower())
+    return [int(p) if i % 2 else p for i, p in enumerate(parts)]
+
+
 def pick_next_topic_file() -> Path | None:
-    """Return the oldest pending topic file, or None if the queue is empty."""
-    files = sorted(QUEUE_PENDING.glob("*.json"), key=lambda p: p.stat().st_mtime)
+    """Return the next pending topic file in file-name order (test2 before test9 before
+    test10), or None if the queue is empty. Modification time is ignored."""
+    files = sorted(QUEUE_PENDING.glob("*.json"), key=lambda p: (_natural_key(p.name), p.name))
     return files[0] if files else None
 
 

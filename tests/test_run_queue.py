@@ -311,6 +311,43 @@ class TestDirtyVariationHistory(_QueueTestCase):
         self.assertIn(IN_PROGRESS, self._origin_files())
 
 
+class TestPickNextTopicFile(unittest.TestCase):
+    """pick_next_topic_file uses file-name order, never modification time."""
+
+    def setUp(self):
+        self.pending = self.tmp / "queue" / "pending"
+        self.pending.mkdir(parents=True)
+        old_cwd = os.getcwd()
+        os.chdir(self.tmp)
+        self.addCleanup(os.chdir, old_cwd)
+
+    def _add_topic(self, name, mtime):
+        path = self.pending / name
+        path.write_text(json.dumps({"topic": name}))
+        os.utime(path, (mtime, mtime))
+
+    def test_picks_in_natural_order_even_when_modified_times_are_reversed(self):
+        (self.pending / ".gitkeep").write_text("")
+        # Opposite of the wanted order: test10 is the oldest file, test2 the newest.
+        self._add_topic("test10.json", 1_000_000_000)
+        self._add_topic("test9.json", 1_000_000_200)
+        self._add_topic("test2.json", 1_000_000_400)
+
+        picked = []
+        for _ in range(3):
+            path = run.pick_next_topic_file()
+            picked.append(path.name)
+            path.unlink()
+
+        self.assertEqual(picked, ["test2.json", "test9.json", "test10.json"])
+        self.assertIsNone(run.pick_next_topic_file())
+
+    def test_folder_with_only_gitkeep_returns_none(self):
+        (self.pending / ".gitkeep").write_text("")
+
+        self.assertIsNone(run.pick_next_topic_file())
+
+
 class TestRealCmdUploadUsesPatchedUpload(unittest.TestCase):
     def test_real_cmd_upload_calls_patched_upload_to_youtube(self):
         from verticals import __main__ as main_module

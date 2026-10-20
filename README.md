@@ -388,6 +388,14 @@ verticals/
 └── requirements.txt
 ```
 
+## Naming queue files
+
+Topics run in file-name order, and numbers are compared as numbers, so `test2` runs before `test9`, and `test9` runs before `test10`. The date a file was saved does not matter.
+
+To control the order, start file names with a number or a date, for example `001-why-is-the-sky-blue.json` or `2026-10-21-why-do-we-yawn.json`.
+
+A file moved back from `queue/in-progress/` keeps its place in line, because only its name matters.
+
 ## If a Topic Is Stuck in queue/in-progress/
 
 A topic file in `queue/in-progress/` means a run claimed the topic around the time it started the YouTube upload. That run either started the upload or stopped just before it, so check YouTube Studio to see whether a video went live.
