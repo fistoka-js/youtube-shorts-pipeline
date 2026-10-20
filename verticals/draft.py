@@ -14,6 +14,11 @@ from .niche import load_niche, get_script_context, get_visual_context, get_visua
 from .research import research_topic
 from .variation import choose_variation, record_variation, format_variation_guidance
 
+# How many generic b-roll prompts to use when Claude returns a non-list value.
+FALLBACK_BROLL_PROMPT_COUNT = 12
+# The most b-roll prompts kept from a draft; extra prompts are dropped.
+MAX_BROLL_PROMPTS = 20
+
 
 def _call_claude(prompt: str, max_tokens: int = 3000) -> str:
     """Backwards-compatible Claude seam used by older tests and callers."""
@@ -170,9 +175,9 @@ Output JSON exactly:
             draft[field] = str(draft[field])
     if "broll_prompts" in draft:
         if not isinstance(draft["broll_prompts"], list):
-            draft["broll_prompts"] = ["Cinematic landscape"] * 12
+            draft["broll_prompts"] = ["Cinematic landscape"] * FALLBACK_BROLL_PROMPT_COUNT
         else:
-            draft["broll_prompts"] = [str(p) for p in draft["broll_prompts"][:20]]
+            draft["broll_prompts"] = [str(p) for p in draft["broll_prompts"][:MAX_BROLL_PROMPTS]]
 
     suffix = get_visual_prompt_suffix(profile)
     if suffix and "broll_prompts" in draft:

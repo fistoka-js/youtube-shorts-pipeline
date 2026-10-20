@@ -34,4 +34,4 @@ class TestGetAudioDuration:
         get_audio_duration(Path("/tmp/audio.mp3"))
         args = mock_cmd.call_args[0][0]
         assert "ffprobe" in args
-        assert "/tmp/audio.mp3" in args
+        assert str(Path("/tmp/audio.mp3")) in args

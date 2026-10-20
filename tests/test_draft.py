@@ -3,7 +3,7 @@
 import json
 from unittest.mock import patch, MagicMock
 
-from verticals.draft import generate_draft
+from verticals.draft import generate_draft, FALLBACK_BROLL_PROMPT_COUNT, MAX_BROLL_PROMPTS
 
 
 class TestGenerateDraft:
@@ -55,7 +55,7 @@ class TestGenerateDraft:
         draft = generate_draft("Test")
         assert isinstance(draft["script"], str)
         assert isinstance(draft["broll_prompts"], list)
-        assert len(draft["broll_prompts"]) == 3  # fallback
+        assert len(draft["broll_prompts"]) == FALLBACK_BROLL_PROMPT_COUNT  # fallback list
 
     @patch("verticals.draft.research_topic")
     @patch("verticals.draft._call_claude")
@@ -79,11 +79,11 @@ class TestGenerateDraft:
         mock_research.return_value = "research"
         mock_claude.return_value = json.dumps({
             "script": "s",
-            "broll_prompts": ["p1", "p2", "p3", "p4", "p5"],  # too many
+            "broll_prompts": [f"p{i}" for i in range(MAX_BROLL_PROMPTS + 5)],  # too many
             "youtube_title": "T", "youtube_description": "D",
             "youtube_tags": "t", "instagram_caption": "C",
             "thumbnail_prompt": "P",
         })
 
         draft = generate_draft("Test")
-        assert len(draft["broll_prompts"]) == 3  # truncated to 3
+        assert len(draft["broll_prompts"]) == MAX_BROLL_PROMPTS  # truncated to the maximum
