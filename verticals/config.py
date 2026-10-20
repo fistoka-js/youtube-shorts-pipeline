@@ -56,11 +56,23 @@ def write_secret_file(path: Path, content: str):
         f.write(content)
 
 
+def _command_failure_message(cmd, returncode, stdout, stderr) -> str:
+    """Error text for a failed command: the command, its exit code, and any
+    stderr or stdout. Still useful when the command printed nothing."""
+    shown = " ".join(str(part) for part in cmd) if isinstance(cmd, (list, tuple)) else str(cmd)
+    parts = [f"Command failed with exit code {returncode}: {shown}"]
+    if stderr and stderr.strip():
+        parts.append(f"stderr: {stderr.strip()}")
+    if stdout and stdout.strip():
+        parts.append(f"stdout: {stdout.strip()}")
+    return "\n".join(parts)
+
+
 def run_cmd(cmd, check=True, capture=False, **kwargs):
     if capture:
         r = subprocess.run(cmd, capture_output=True, text=True, **kwargs)
         if check and r.returncode != 0:
-            raise RuntimeError(r.stderr)
+            raise RuntimeError(_command_failure_message(cmd, r.returncode, r.stdout, r.stderr))
         return r
     subprocess.run(cmd, check=check, **kwargs)
 

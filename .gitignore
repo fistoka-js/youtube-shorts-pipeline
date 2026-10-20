@@ -4,6 +4,9 @@ client_secret*.json
 youtube_token.json
 *.key
 
+# Local-only folder with keys, tokens and config. Never commit it.
+.verticals/
+
 # Environment files
 .env
 .env.*

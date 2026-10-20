@@ -201,8 +201,8 @@ def _is_portrait(video: dict) -> bool:
     Square files do NOT count: a square clip loses width in the 9:16 crop, so
     it gets no portrait bonus."""
     entry = _best_file_entry(video) or {}
-    width = entry.get("width") or video.get("width")
-    height = entry.get("height") or video.get("height")
+    width = _pexels_size(entry.get("width")) or _pexels_size(video.get("width"))
+    height = _pexels_size(entry.get("height")) or _pexels_size(video.get("height"))
     if not width or not height:
         return False
     return height > width
@@ -358,16 +358,26 @@ def _fetch_pexels_candidates(query: str, api_key: str) -> list[dict]:
     return r.json().get("videos", [])
 
 
+def _pexels_size(value) -> int:
+    """A Pexels width or height as an int. Missing, None, empty, non-numeric or
+    infinite values count as 0 (unknown), so one bad entry cannot crash the comparison."""
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
 def _best_file_entry(video: dict) -> dict | None:
     """The video_files entry that _best_file_link picks (highest height,
     portrait files preferred). Used by the build report to read the size of
     the file that is actually downloaded."""
     files = video.get("video_files", [])
-    portrait = [f for f in files if f.get("height", 0) > f.get("width", 0)]
+    portrait = [f for f in files
+                if _pexels_size(f.get("height")) > _pexels_size(f.get("width"))]
     candidates = portrait or files
     if not candidates:
         return None
-    return max(candidates, key=lambda f: f.get("height", 0))
+    return max(candidates, key=lambda f: _pexels_size(f.get("height")))
 
 
 def _best_file_link(video: dict) -> str | None:
@@ -525,7 +535,7 @@ def _decide_crop(raw_path: Path, duration: float, out_w: int, out_h: int,
                     frames.append(im.convert("RGB"))
             return _choose_crop(frames, out_w, out_h, prompt)
     except Exception as e:
-        # Some errors (e.g. run_cmd with -v quiet) carry no text, so name the type too.
+        # The fallback is a safety net for any error that carries no text, so name the type too.
         reason = str(e) or "no details given"
         log(f"WARNING: crop check skipped ({type(e).__name__}: {reason}), using the centre crop")
         return None
@@ -571,50 +581,53 @@ def _download_and_crop_video(url: str, out_path: Path, duration: float | None,
     clip_out: optional dict, filled with saved_clip_seconds (the length of the
     file that was written, probed locally; the kept length if probing fails)."""
     tmp_path = out_path.with_suffix(".raw.mp4")
-    r = requests.get(url, timeout=90, stream=True)
-    r.raise_for_status()
-    with open(tmp_path, "wb") as f:
-        for chunk in r.iter_content(chunk_size=1 << 16):
-            f.write(chunk)
-    if duration is None:
-        native = _probe_duration(tmp_path)
-        if native is None:
-            native = _usable_or_none(fallback_duration)
-            log(f"  Could not read the clip length from the file; "
-                f"using {'Pexels' if native is not None else 'the fixed'} length")
-        kept = (min(native, MAX_CLIP_SECONDS) if native is not None
-                else FIXED_CLIP_SECONDS)
-        t_arg = str(kept)
-    else:
-        kept = float(duration)
-        t_arg = str(duration)
-    crop_x = None
-    if crop_prompt is not None:
-        decision = _decide_crop(tmp_path, kept, width, height, crop_prompt)
-        if decision is not None:
-            crop_x = decision["x"]
-            if crop_out is not None:
-                crop_out.update(
-                    crop_offset=decision["crop_offset"],
-                    crop_side=decision["side"],
-                    center_score=decision["center_score"],
-                    chosen_score=decision["chosen_score"],
-                )
-    crop_expr = (f"crop={width}:{height}" if crop_x is None
-                 else f"crop={width}:{height}:{crop_x}:0")
-    vf = (
-        f"scale={width}:{height}:force_original_aspect_ratio=increase,"
-        f"{crop_expr}"
-    )
-    run_cmd([
-        "ffmpeg", "-i", str(tmp_path), "-t", t_arg,
-        "-vf", vf, "-an", "-r", "30", "-pix_fmt", "yuv420p",
-        str(out_path), "-y", "-loglevel", "quiet",
-    ])
-    tmp_path.unlink(missing_ok=True)
-    if clip_out is not None:
-        saved = _probe_duration(out_path)
-        clip_out["saved_clip_seconds"] = saved if saved is not None else kept
+    try:
+        r = requests.get(url, timeout=90, stream=True)
+        r.raise_for_status()
+        with open(tmp_path, "wb") as f:
+            for chunk in r.iter_content(chunk_size=1 << 16):
+                f.write(chunk)
+        if duration is None:
+            native = _probe_duration(tmp_path)
+            if native is None:
+                native = _usable_or_none(fallback_duration)
+                log(f"  Could not read the clip length from the file; "
+                    f"using {'Pexels' if native is not None else 'the fixed'} length")
+            kept = (min(native, MAX_CLIP_SECONDS) if native is not None
+                    else FIXED_CLIP_SECONDS)
+            t_arg = str(kept)
+        else:
+            kept = float(duration)
+            t_arg = str(duration)
+        crop_x = None
+        if crop_prompt is not None:
+            decision = _decide_crop(tmp_path, kept, width, height, crop_prompt)
+            if decision is not None:
+                crop_x = decision["x"]
+                if crop_out is not None:
+                    crop_out.update(
+                        crop_offset=decision["crop_offset"],
+                        crop_side=decision["side"],
+                        center_score=decision["center_score"],
+                        chosen_score=decision["chosen_score"],
+                    )
+        crop_expr = (f"crop={width}:{height}" if crop_x is None
+                     else f"crop={width}:{height}:{crop_x}:0")
+        vf = (
+            f"scale={width}:{height}:force_original_aspect_ratio=increase,"
+            f"{crop_expr}"
+        )
+        run_cmd([
+            "ffmpeg", "-i", str(tmp_path), "-t", t_arg,
+            "-vf", vf, "-an", "-r", "30", "-pix_fmt", "yuv420p",
+            str(out_path), "-y", "-loglevel", "quiet",
+        ])
+        if clip_out is not None:
+            saved = _probe_duration(out_path)
+            clip_out["saved_clip_seconds"] = saved if saved is not None else kept
+    finally:
+        # The raw download is only a temp file. Remove it whether the crop worked or failed.
+        tmp_path.unlink(missing_ok=True)
     return out_path
 
 
