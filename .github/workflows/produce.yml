@@ -5,6 +5,10 @@ on:
   # schedule:
   #   - cron: "0 14 * * *"  # example: daily at 14:00 UTC, uncomment when ready
 
+# The run commits and pushes queue changes back to the branch, so it needs write access to the repo contents.
+permissions:
+  contents: write
+
 # One run at a time: a second run waits for the first to finish (including its
 # commit and push) instead of overlapping. cancel-in-progress is false so a
 # running upload is never cancelled.

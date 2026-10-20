@@ -487,6 +487,9 @@ class TestWorkflowFile(unittest.TestCase):
     def test_concurrency_is_workflow_level_not_job_level(self):
         self.assertNotIn("concurrency", self.data["jobs"]["produce"])
 
+    def test_top_level_permissions_allow_contents_write(self):
+        self.assertEqual(self.data["permissions"], {"contents": "write"})
+
     def test_variation_env_var_set_in_job_env(self):
         env = self.data["jobs"]["produce"]["env"]
         self.assertEqual(
