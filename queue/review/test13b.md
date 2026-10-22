@@ -93,3 +93,4 @@ Picture a 500-ton machine hurtling down a runway — then lifting effortlessly i
 
 Bracketed markers removed by the cleaner: 0.
 
+Video: https://youtu.be/18qhP0vmW5s
