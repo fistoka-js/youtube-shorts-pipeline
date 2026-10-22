@@ -63,7 +63,7 @@ class TestShortsBrollSubjectPrompt:
     def _shorts_prompt(self, mock_claude, mock_research, mock_record):
         mock_claude.return_value = json.dumps(_shorts_payload())
         generate_draft("why do we get goosebumps")
-        return mock_claude.call_args[0][0]
+        return mock_claude.call_args_list[0][0][0]  # the draft prompt (the fact check call comes after it)
 
     def test_asks_for_two_to_four_word_visual_phrase(self):
         prompt = self._shorts_prompt()

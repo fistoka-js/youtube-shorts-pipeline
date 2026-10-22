@@ -10,10 +10,11 @@ import json
 from .config import PLATFORM_CONFIGS
 from .llm import call_llm
 from .log import log
-from .script_clean import clean_script, log_removed, strip_script_markers
+from .script_clean import log_removed, strip_script_markers
 from .niche import load_niche, get_script_context, get_visual_context, get_visual_prompt_suffix
 from .research import research_topic
 from .variation import choose_variation, record_variation, format_variation_guidance
+from .fact_check import audit_script, build_corrections_block, flagged_claims
 
 # How many generic b-roll prompts to use when Claude returns a non-list value.
 FALLBACK_BROLL_PROMPT_COUNT = 12
@@ -24,6 +25,68 @@ MAX_BROLL_PROMPTS = 20
 def _call_claude(prompt: str, max_tokens: int = 3000) -> str:
     """Backwards-compatible Claude seam used by older tests and callers."""
     return call_llm(prompt, provider="claude", max_tokens=max_tokens)
+
+
+SHORTS_STR_FIELDS = [
+    "script", "broll_subject", "youtube_title", "youtube_description",
+    "youtube_tags", "instagram_caption", "tiktok_caption",
+    "thumbnail_prompt",
+]
+
+
+def _parse_shorts_json(raw: str) -> dict:
+    """Strip code fences, take the JSON object and parse it. Used for the first draft and the redraft."""
+    if raw.startswith("```"):
+        raw = raw.split("```")[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+        raw = raw.strip()
+
+    start = raw.find("{")
+    end = raw.rfind("}") + 1
+    if start >= 0 and end > start:
+        raw = raw[start:end]
+
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as e:
+        debug_path = "debug_shorts_raw.txt"
+        with open(debug_path, "w", encoding="utf-8") as f:
+            f.write(raw)
+        raise ValueError(f"Claude returned invalid JSON ({e}). Full raw response saved to {debug_path} for inspection.") from e
+
+
+def _raw_script(draft: dict) -> str:
+    """The script exactly as the model returned it, before any cleaning."""
+    value = draft.get("script", "")
+    if value is None:
+        return ""
+    return value if isinstance(value, str) else str(value)
+
+
+def _tidy_shorts_draft(draft: dict, profile: dict) -> int:
+    """Sanitize a parsed Shorts draft in place. Returns the number of markers removed.
+
+    Does not log: the caller logs the one "Removed N" line for the script it uses.
+    """
+    if "script" in draft and draft["script"] is None:
+        draft["script"] = ""  # a null script is an empty script, not the text "None"
+    for field in SHORTS_STR_FIELDS:
+        if field in draft and not isinstance(draft[field], str):
+            draft[field] = str(draft[field])
+    removed = 0
+    if "script" in draft:
+        draft["script"], removed = strip_script_markers(draft["script"])
+    if "broll_prompts" in draft:
+        if not isinstance(draft["broll_prompts"], list):
+            draft["broll_prompts"] = ["Cinematic landscape"] * FALLBACK_BROLL_PROMPT_COUNT
+        else:
+            draft["broll_prompts"] = [str(p) for p in draft["broll_prompts"][:MAX_BROLL_PROMPTS]]
+
+    suffix = get_visual_prompt_suffix(profile)
+    if suffix and "broll_prompts" in draft:
+        draft["broll_prompts"] = [f"{p}. {suffix}" for p in draft["broll_prompts"]]
+    return removed
 
 
 def generate_draft(
@@ -119,6 +182,7 @@ LIVE RESEARCH (use ONLY names/facts from here \u2014 never fabricate):
 
 RULES:
 - Anti-hallucination: only use names, scores, events found in research above
+- If the topic has a famous misconception, state that it is wrong instead of repeating it as fact
 - Follow the TONE, PACING, and HOOK PATTERNS from the niche profile above
 - Pick the most appropriate hook pattern for this specific topic
 - Use one of the CTA OPTIONS at the end
@@ -143,54 +207,77 @@ Output JSON exactly:
   "thumbnail_prompt": "..."
 }}"""
 
-    if provider in (None, "claude"):
-        raw = _call_claude(prompt)
+    def ask(text: str) -> str:
+        """One LLM call on the same path the draft itself uses. The fact check uses it too."""
+        if provider in (None, "claude"):
+            return _call_claude(text)
+        return call_llm(text, provider=provider)
+
+    draft = _parse_shorts_json(ask(prompt))
+    first_snapshot = dict(draft)  # taken before cleaning, so a redraft can be filled from it
+    raw_script_first = _raw_script(draft)
+    markers_first = _tidy_shorts_draft(draft, profile)
+
+    audit_first = audit_script(draft.get("script", ""), research, news, llm_call=ask)
+    fact_check = {
+        "first_audit": audit_first,
+        "redrafted": False,
+        "redraft_error": None,
+        "final_audit": audit_first,
+        "needs_fact_check": False,
+        "raw_script_first": raw_script_first,
+        "raw_script_redraft": None,
+        "markers_removed_first": markers_first,
+        "markers_removed_redraft": None,
+    }
+    markers_used = markers_first
+
+    if not audit_first["available"]:
+        log(f"Fact check unavailable: {audit_first['error']}")
+    elif audit_first["ok"]:
+        log("Fact check passed")
     else:
-        raw = call_llm(prompt, provider=provider)
-
-    if raw.startswith("```"):
-        raw = raw.split("```")[1]
-        if raw.startswith("json"):
-            raw = raw[4:]
-        raw = raw.strip()
-
-    start = raw.find("{")
-    end = raw.rfind("}") + 1
-    if start >= 0 and end > start:
-        raw = raw[start:end]
-
-    try:
-        draft = json.loads(raw)
-    except json.JSONDecodeError as e:
-        debug_path = "debug_shorts_raw.txt"
-        with open(debug_path, "w", encoding="utf-8") as f:
-            f.write(raw)
-        raise ValueError(f"Claude returned invalid JSON ({e}). Full raw response saved to {debug_path} for inspection.") from e
-
-    expected_str_fields = [
-        "script", "broll_subject", "youtube_title", "youtube_description",
-        "youtube_tags", "instagram_caption", "tiktok_caption",
-        "thumbnail_prompt",
-    ]
-    for field in expected_str_fields:
-        if field in draft and not isinstance(draft[field], str):
-            draft[field] = str(draft[field])
-    if "script" in draft:
-        draft["script"] = clean_script(draft["script"])
-    if "broll_prompts" in draft:
-        if not isinstance(draft["broll_prompts"], list):
-            draft["broll_prompts"] = ["Cinematic landscape"] * FALLBACK_BROLL_PROMPT_COUNT
+        flagged = flagged_claims(audit_first)
+        log(f"Fact check: {len(flagged)} claim(s) flagged, redrafting once")
+        try:
+            redraft = _parse_shorts_json(ask(prompt + build_corrections_block(flagged)))
+            if not isinstance(redraft, dict):
+                raise ValueError("the redraft was not a JSON object")
+            fact_check["raw_script_redraft"] = _raw_script(redraft)
+            if not isinstance(redraft.get("script"), str) or not redraft["script"].strip():
+                raise ValueError("the redraft script was missing, not text, or empty")
+            # Fields the redraft left out are taken from the first draft (its values before cleaning).
+            for key, value in first_snapshot.items():
+                redraft.setdefault(key, value)
+            markers_redraft = _tidy_shorts_draft(redraft, profile)
+            if not redraft["script"].strip():
+                raise ValueError("the redraft script was empty once bracketed markers were removed")
+            audit_final = audit_script(redraft["script"], research, news, llm_call=ask)
+        except Exception as e:
+            # The redraft is optional: keep the first script and mark it for a human check.
+            fact_check["redraft_error"] = f"{type(e).__name__}: {str(e)[:200]}"
+            log(f"Redraft failed ({fact_check['redraft_error']}). Keeping the first script; marked NEEDS FACT CHECK")
         else:
-            draft["broll_prompts"] = [str(p) for p in draft["broll_prompts"][:MAX_BROLL_PROMPTS]]
+            draft = redraft
+            markers_used = markers_redraft
+            fact_check["redrafted"] = True
+            fact_check["markers_removed_redraft"] = markers_redraft
+            fact_check["final_audit"] = audit_final
+            if not audit_final["available"]:
+                log(f"Fact check unavailable: {audit_final['error']}")
+            elif audit_final["ok"]:
+                log("Fact check passed")
+            else:
+                log("Still flagged after redraft - marked NEEDS FACT CHECK")
 
-    suffix = get_visual_prompt_suffix(profile)
-    if suffix and "broll_prompts" in draft:
-        draft["broll_prompts"] = [f"{p}. {suffix}" for p in draft["broll_prompts"]]
+    fact_check["needs_fact_check"] = (not fact_check["final_audit"]["ok"]) or fact_check["redraft_error"] is not None
+    log_removed(markers_used)  # one "Removed N" line, for the script that is used
 
     draft["news"] = news
     draft["research"] = research
     draft["niche"] = niche
     draft["platform"] = platform
+    draft["fact_check"] = fact_check
     record_variation(niche, variation)
     return draft
 

@@ -27,6 +27,35 @@ def maybe_run_setup(args):
     run_setup()
 
 
+def _write_review_sheet(review_name, draft):
+    """Write queue/review/<review_name>.md for a Shorts draft. Never raises: a failure only logs a warning."""
+    from .review_sheet import write_review_sheet
+    try:
+        path = write_review_sheet(
+            review_name,
+            topic=draft.get("news", ""),
+            fact_check=draft.get("fact_check"),
+            final_script=draft.get("script", ""),
+            research=draft.get("research", ""),
+        )
+        log(f"Review sheet written: {path}")
+    except Exception as e:
+        log(f"WARNING: could not write the review sheet for {review_name} ({e}). The run continues.")
+
+
+def _add_video_line(review_name, url):
+    """Add the Video: link to the review sheet after the upload. Never raises."""
+    from .review_sheet import add_video_line
+    if not url:
+        log(f"WARNING: no video link to add to the review sheet for {review_name}.")
+        return
+    try:
+        # None means there is no sheet for this topic (for example it was never written), so there is nothing to update.
+        add_video_line(review_name, url)
+    except Exception as e:
+        log(f"WARNING: could not add the video link to the review sheet for {review_name} ({e}).")
+
+
 def cmd_draft(args):
     from .draft import generate_draft, generate_long_form_draft
     from .state import PipelineState
@@ -63,6 +92,10 @@ def cmd_draft(args):
     state.complete_stage("research")
     state.complete_stage("draft")
     state.save(out_path)
+
+    review_name = getattr(args, "review_name", None)
+    if review_name and platform != "long_form":
+        _write_review_sheet(review_name, draft)
 
     print(f"\n  Draft saved: {out_path}")
     print(f"\n  Title: {draft.get('youtube_title', '')}")
@@ -607,6 +640,10 @@ def cmd_run(args):
         force = False
 
     url = cmd_upload(UploadArgs())
+    review_name = getattr(args, "review_name", None)
+    platform = getattr(args, "platform", "shorts") or "shorts"
+    if review_name and platform != "long_form":  # the same condition cmd_draft uses to write the sheet
+        _add_video_line(review_name, url)
     print(f"\n  Done! {url}")
 
 

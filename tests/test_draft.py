@@ -70,7 +70,7 @@ class TestGenerateDraft:
 
         draft = generate_draft("Test", channel_context="esports news channel")
         # Verify the channel context was passed to Claude
-        call_args = mock_claude.call_args[0][0]
+        call_args = mock_claude.call_args_list[0][0][0]  # the draft prompt (the fact check call comes after it)
         assert "esports news channel" in call_args
 
     @patch("verticals.draft.research_topic")

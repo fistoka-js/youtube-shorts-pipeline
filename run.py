@@ -174,6 +174,7 @@ def main():
     RunArgs.context = ""
     RunArgs.discover = False
     RunArgs.auto_pick = False
+    RunArgs.review_name = topic_file.stem  # names queue/review/<stem>.md
 
     in_ci = os.environ.get("GITHUB_ACTIONS") == "true"
     # Where the topic file is now: pending/ until claimed, then in-progress/.

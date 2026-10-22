@@ -187,7 +187,7 @@ class TestShortsDraft:
         mock_research.return_value = "research"
         mock_claude.return_value = json.dumps({"script": "Hello.", "broll_prompts": ["p"]})
         generate_draft("Yawning")
-        sent_prompt = mock_claude.call_args[0][0]
+        sent_prompt = mock_claude.call_args_list[0][0][0]  # the draft prompt (the fact check call comes after it)
         assert 'The "script" field contains ONLY the words to be spoken aloud' in sent_prompt
         assert "no square-bracket notes" in sent_prompt
         assert "All visuals belong in broll_prompts" in sent_prompt
