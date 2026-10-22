@@ -10,6 +10,7 @@ import json
 from .config import PLATFORM_CONFIGS
 from .llm import call_llm
 from .log import log
+from .script_clean import clean_script, log_removed, strip_script_markers
 from .niche import load_niche, get_script_context, get_visual_context, get_visual_prompt_suffix
 from .research import research_topic
 from .variation import choose_variation, record_variation, format_variation_guidance
@@ -128,6 +129,7 @@ RULES:
 - SUBJECT DOMINANCE: identify the literal main subject of this topic (the specific animal/person/object/place the video is actually about). At least 65% of b-roll prompts MUST show real footage of that literal subject in frame \u2014 not a related concept, not a metaphor, not a diagram standing in for it. Reserve abstract/metaphor/diagram-style prompts (e.g. molecules, relay-race analogies, evolutionary trees, split-screen comparisons) for at most 35% of prompts, and only for beats that genuinely have no direct visual (an internal biological process, an invisible force, a numeric comparison).
 - NEVER generate disturbing, graphic, violent, or unsettling imagery \u2014 if a script beat describes something negative (injury, distress, danger), depict it tastefully and indirectly (e.g. a vet's office, not the injury itself) or substitute a safe adjacent visual
 - Keep every prompt concrete and photographic: a specific subject, setting, and mood \u2014 not abstract concepts
+- The "script" field contains ONLY the words to be spoken aloud: no square-bracket notes, no [B-ROLL: ...] markers, no stage directions or visual cues. All visuals belong in broll_prompts
 Output JSON exactly:
 {{
   "script": "...",
@@ -173,6 +175,8 @@ Output JSON exactly:
     for field in expected_str_fields:
         if field in draft and not isinstance(draft[field], str):
             draft[field] = str(draft[field])
+    if "script" in draft:
+        draft["script"] = clean_script(draft["script"])
     if "broll_prompts" in draft:
         if not isinstance(draft["broll_prompts"], list):
             draft["broll_prompts"] = ["Cinematic landscape"] * FALLBACK_BROLL_PROMPT_COUNT
@@ -380,10 +384,13 @@ Output JSON exactly:
 
     top_level_subject = str(draft.get("broll_subject", "")).strip()
     clean_sections = []
+    removed_total = 0
     for i, sec in enumerate(sections):
         sid = str(sec.get("id", f"s{i+1}"))
         heading = str(sec.get("heading", f"Section {i+1}"))
-        narration = str(sec.get("narration", "")).strip()
+        narration, removed = strip_script_markers(str(sec.get("narration", "")))
+        removed_total += removed
+        narration = narration.strip()
         if not narration:
             continue
         # Fall back to the top-level subject if this section didn't get
@@ -399,6 +406,7 @@ Output JSON exactly:
             "id": sid, "heading": heading, "narration": narration,
             "broll_subject": section_subject, "broll_prompts": prompts,
         })
+    log_removed(removed_total)  # one line for the whole long-form draft
     if not clean_sections:
         raise ValueError("All sections were empty after validation - cannot build long-form draft")
     draft["sections"] = clean_sections

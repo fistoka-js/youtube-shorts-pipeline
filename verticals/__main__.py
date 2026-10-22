@@ -98,6 +98,8 @@ def cmd_produce(args):
     from .assemble import assemble_video
     from .niche import load_niche, get_voice_config, get_caption_config, get_music_config
     from .state import PipelineState
+    from .script_clean import clean_script, strip_script_markers
+    from .draft import FALLBACK_BROLL_PROMPT_COUNT
     import json
     import shutil
 
@@ -121,9 +123,21 @@ def cmd_produce(args):
 
     force = getattr(args, "force", False)
     tts_provider = getattr(args, "voice", None)
-    script = getattr(args, "script", None) or (
-        draft.get("script_hi") if lang == "hi" else draft.get("script")
-    )
+    # Visual notes such as "[B-ROLL: ...]" are removed here, once, so the b-roll
+    # length estimate, the voice, the captions and the file name all use the same
+    # clean text. The English draft script is what captions and the file name use.
+    script_override = getattr(args, "script", None)
+    if script_override:
+        spoken_raw, spoken_is_english = script_override, False
+    elif lang == "hi":
+        spoken_raw, spoken_is_english = draft.get("script_hi"), False
+    else:
+        spoken_raw, spoken_is_english = draft.get("script"), True
+    script = clean_script(spoken_raw)
+    if spoken_is_english:
+        english_script = script
+    else:
+        english_script = strip_script_markers(draft.get("script", ""))[0]
 
     print(f"\n  Producing {lang.upper()} video for job {job_id} [niche: {niche_name}]")
 
@@ -133,7 +147,7 @@ def cmd_produce(args):
     report_path = build_report.report_path_for(draft_path, job_id, lang)
     if force or not state.is_done("broll"):
         broll_rows = []
-        broll_prompts = draft.get("broll_prompts", ["Cinematic landscape"] * 12)
+        broll_prompts = draft.get("broll_prompts", ["Cinematic landscape"] * FALLBACK_BROLL_PROMPT_COUNT)
         # The voiceover is made AFTER b-roll, so the slot length is estimated from
         # the same script text the voiceover will speak (see broll.estimate_slot_seconds).
         est_slot = estimate_slot_seconds(script, len(broll_prompts))
@@ -180,7 +194,7 @@ def cmd_produce(args):
             words_per_group=caption_config.get("words_per_group", 4),
             font_family=caption_config.get("font_family", "Arial"),
             font_size=int(caption_config.get("font_size", 72)),
-            script_text=draft.get("script", ""),
+            script_text=english_script,
         )
         state.complete_stage("captions", {
             "srt_path": str(captions_result.get("srt_path", "")),
@@ -223,7 +237,7 @@ def cmd_produce(args):
         video_path = assemble_video(
             frames=frames,
             voiceover=vo_path,
-            title=draft.get("script", "").split("?")[0].split(".")[0].split("!")[0].strip(),
+            title=english_script.split("?")[0].split(".")[0].split("!")[0].strip(),
             out_dir=work_dir,
             job_id=job_id,
             lang=lang,
@@ -253,6 +267,7 @@ def cmd_produce(args):
     return video_path
 
 def cmd_produce_long_form(args):
+    from .script_clean import strip_script_markers, log_removed
     from .broll import generate_broll_long_form
     from .tts import generate_voiceover
     from .captions import generate_captions
@@ -283,10 +298,28 @@ def cmd_produce_long_form(args):
     # Concatenate all section narration into one script for TTS - the
     # existing TTS/captions/assemble stages are section-agnostic, they
     # just need one continuous script and audio file.
+    # Visual notes such as "[B-ROLL: ...]" are removed from every section's narration
+    # here, once, so the voice, captions, section timings and b-roll all use the same
+    # clean text. Copies are made, so the stored draft is not changed. A section that
+    # is only a marker becomes empty and is dropped from the copies, as the draft step
+    # does for new drafts.
+    removed_total = 0
+    cleaned_sections = []
+    for sec in sections:
+        narration, removed = strip_script_markers(sec["narration"])
+        removed_total += removed
+        if not narration.strip():
+            continue
+        cleaned_sections.append({**sec, "narration": narration})
+    sections = cleaned_sections
+    log_removed(removed_total)
+    if not sections:
+        raise ValueError("No narration is left after removing bracketed markers - nothing to produce")
     full_script = "\n\n".join(sec["narration"] for sec in sections)
+    total_words = sum(len(sec["narration"].split()) for sec in sections)
 
     print(f"\n  Producing LONG-FORM {lang.upper()} video for job {job_id} [niche: {niche_name}]")
-    print(f"  {len(sections)} sections, {draft.get('total_words', 0)} words")
+    print(f"  {len(sections)} sections, {total_words} words")
 
     from .config import PLATFORM_CONFIGS
     lf_cfg = PLATFORM_CONFIGS["long_form"]

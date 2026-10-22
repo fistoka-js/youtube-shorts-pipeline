@@ -23,6 +23,7 @@ from .config import (
 )
 from .log import log
 from .retry import with_retry
+from .script_clean import clean_script
 
 
 # ─────────────────────────────────────────────────────
@@ -378,6 +379,7 @@ def generate_voiceover(
     Returns:
         Path to the generated audio file.
     """
+    script = clean_script(script)  # never read visual notes like [B-ROLL: ...] aloud
     provider = get_tts_provider(provider)
     voice_config = voice_config or {}
 
