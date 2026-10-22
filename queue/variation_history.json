@@ -54,5 +54,12 @@
     "narrative_structure": "what-if: explore a hypothetical framing throughout (what if this trait didn't exist, etc.)",
     "outro_treatment": "forward-looking teaser about a related unanswered question",
     "visual_treatment": "diagram-and-data: lean into the upper end of the allowed abstract/diagram prompt ratio - more anatomical diagrams, data visualizations, and explanatory graphics than usual"
+  },
+  {
+    "niche": "science",
+    "intro_style": "scene-setting: open by describing a vivid, specific moment or scenario",
+    "narrative_structure": "chronological: walk through how/why something developed over time, in order",
+    "outro_treatment": "call-back to the video's opening hook, resolving it",
+    "visual_treatment": "stock-footage-led: maximize real subject footage, keep abstract/diagram prompts to the bare minimum needed"
   }
 ]
