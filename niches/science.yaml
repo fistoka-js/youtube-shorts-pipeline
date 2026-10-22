@@ -18,7 +18,7 @@ script:
       template: "Why does {phenomenon} happen? The answer took scientists {timeframe} to figure out."
       when: "explained phenomenon"
   cta_variants:
-    - "Follow for daily science in 60 seconds."
+    - "Follow for more science."
     - "Subscribe for discoveries that blow your mind."
     - "Did you know this? Comment below."
   forbidden_phrases:
