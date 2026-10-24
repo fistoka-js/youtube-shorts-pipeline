@@ -61,5 +61,12 @@
     "narrative_structure": "chronological: walk through how/why something developed over time, in order",
     "outro_treatment": "call-back to the video's opening hook, resolving it",
     "visual_treatment": "stock-footage-led: maximize real subject footage, keep abstract/diagram prompts to the bare minimum needed"
+  },
+  {
+    "niche": "science",
+    "intro_style": "myth-busting: open by stating a common belief, then say it's wrong",
+    "narrative_structure": "question-led: structure the whole video as a chain of questions, each answered before raising the next",
+    "outro_treatment": "reflective wrap-up connecting the specific fact to a bigger idea",
+    "visual_treatment": "still-image-with-motion: allow more still-photo-style prompts (landscapes, close-ups, portraits) that work well with Ken Burns pans/zooms, alongside video clips"
   }
 ]
