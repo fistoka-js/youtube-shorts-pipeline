@@ -410,6 +410,38 @@ Note: these GitHub web-editor (pencil icon) steps have not been tested yet.
 
 Stuck topics never expire automatically. They stay in `queue/in-progress/` until you move them.
 
+## If a Topic Is in queue/failed/
+
+A topic goes to `queue/failed/` in one of two cases:
+
+- It failed 2 times before it was finished. Each failed try is counted in the file's `attempts` field. After the second failure the file moves to `queue/failed/`, so the topics behind it can run.
+- Its file could not be read. The file was broken, was not a proper topic file, or had no `topic` text.
+
+Most files here have an `error` field that says why, in one short line. Read it first. The exception is a file that could not be read at all: it is moved over exactly as it was, so it has no `error` field. For that one, the reason is in the log of the run that moved it (the red run on GitHub's Actions page, or the console output on your own computer). If a file with the same name is already in `queue/failed/`, the new one is saved as `<name>-2.json` (then `-3`, and so on), so no earlier record is lost. A very long file name is also shortened when the file moves to `queue/failed/`, so the name there can differ a little from the original (the topic text inside is unchanged).
+
+**Caution first:** if the failure happened on a run on your own computer during the YouTube upload, the video may already be live. Check YouTube Studio first. If the video is there, do not retry the topic.
+
+**The easiest way to try a topic again (no editing of commas needed):**
+
+1. Open the file in `queue/failed/` and copy three values: the topic text (the value after `"topic":`), the niche and the platform. If the file looks like `{"error": ..., "original_text": ...}`, the original text is inside `original_text`, so copy the topic, niche and platform from there. If the file has no usable topic text (no `topic` field, or an empty one), there is nothing to copy: type your own topic in step 2, or just delete the file.
+2. Create a new file in `queue/pending/`, named like the old one (for example `test2.json`). Put exactly ONE line in it, in this format, using the three values you copied:
+
+   `{"topic": "why do we yawn", "niche": "science", "platform": "shorts"}`
+
+   The words in this example line are only an example. Replace them with your own values.
+
+3. Delete the old file from `queue/failed/`.
+
+If you made a topic file in a Windows editor and it lands in `queue/failed/` with an error that mentions "BOM", save it again as plain UTF-8 (without BOM) and re-create it in `queue/pending/`.
+
+Topics run in the order of their file names (see "Naming queue files" above), so keep the number or date at the start of the name.
+
+On github.com, use **Add file** then **Create new file**, type `queue/pending/` and the file name in the name box, paste the one line, and click **Commit changes**. Then open the old file in `queue/failed/`, click the trash icon, and commit.
+
+Note: these GitHub web-editor steps (Add file, Create new file, and the trash icon) have not been tested yet.
+
+A failure after the YouTube upload has started is different. Those topics stay in `queue/in-progress/` (see the section above) and do not go to `queue/failed/`. Runs on your own computer keep such a topic in `queue/pending/`, and it counts as one of the 2 tries.
+
 ## Cloud Install Pins
 
 The cloud workflow installs from `requirements.txt` and then `constraints-ci.txt`. That file lists the exact version of every package from the last green cloud run, so each cloud run installs the same versions. Local installs do not use it. They keep the version ranges in `requirements.txt`.
