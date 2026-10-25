@@ -7,7 +7,6 @@ from pathlib import Path
 
 from .config import CONFIG_FILE, DRAFTS_DIR, MEDIA_DIR, run_setup
 from .log import log, set_verbose
-from .niche import list_niches
 
 
 def maybe_run_setup(args):
@@ -668,6 +667,7 @@ def cmd_topics(args):
 
 def cmd_niches(args):
     """List all available niche profiles."""
+    from .niche import list_niches
     niches = list_niches()
     print(f"\n  Available niches ({len(niches)}):\n")
     for n in niches:
@@ -752,7 +752,22 @@ def cmd_suggest(args):
         sys.exit(code)
 
 
+def cmd_queue_add(argv):
+    """Turn the ticked topics of a suggestion issue into queue files. Exits 0 unless a real error occurs."""
+    from .queue_add import main as queue_add_main
+    code = queue_add_main(argv)
+    if code:
+        sys.exit(code)
+
+
 def main():
+    # queue-add runs in the add-topics workflow, which installs no packages. It is handled before the
+    # argument parser is built, because the parser needs the niche list, and that needs PyYAML.
+    if sys.argv[1:2] == ["queue-add"]:
+        cmd_queue_add(sys.argv[2:])
+        return
+
+    from .niche import list_niches
     parser = argparse.ArgumentParser(
         description="Verticals v3 — AI-Native Vertical Video Engine",
         formatter_class=argparse.RawDescriptionHelpFormatter,

@@ -403,7 +403,9 @@ Each idea has a footage note, which says how much stock video is available for i
 
 Each new suggestion makes one call to the language model and costs roughly 2 to 4 cents.
 
-Turning the ticked ideas into queue files is the next step, and it is not built yet. The `add-to-queue` label on the issue does nothing yet. Until the next step is built, add a ticked topic by hand as described in [Adding topics and the low-queue issue](#adding-topics-and-the-low-queue-issue).
+**To add ticked ideas to the queue:** tick the ideas you like (change `[ ]` to `[x]`), then add the label `add-to-queue` to the issue. Within about a minute, a comment lists what was added to `queue/pending/` and the issue closes. The label is created automatically with each new suggestion issue. Only the repository owner can do this, so the owner must be the account that adds the label.
+
+If nothing was ticked, or every ticked idea is already in the queue, the bot comments and removes the label, so you can add it again. If two labels are added at nearly the same time while another run is going, GitHub can drop one of the runs. If that happens, remove the label and add it again.
 
 ## Adding topics and the low-queue issue
 

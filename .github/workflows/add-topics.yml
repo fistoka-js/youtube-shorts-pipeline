@@ -1,0 +1,127 @@
+name: Add ticked topics to the queue
+
+# Runs when the label add-to-queue is added to a topic-suggestion issue (see the job's if: below).
+# It turns the ticked lines into queue/pending files, commits and pushes them, then comments on the
+# issue and closes it. If nothing new was queued, it comments and removes the label instead.
+on:
+  issues:
+    types: [labeled]
+
+# The run commits and pushes queue files (contents: write), and comments on and closes or relabels
+# the issue (issues: write).
+permissions:
+  contents: write
+  issues: write
+
+# Same group as produce.yml, so this run never overlaps a produce run and both push to main one at a time.
+concurrency:
+  group: produce-queue
+  cancel-in-progress: false
+
+jobs:
+  add-topics:
+    # All five conditions must hold. Only the repository owner can trigger this, and only on an open
+    # issue that the suggestion workflow created (the topic-suggestions label, made by github-actions[bot]).
+    if: >-
+      github.event.label.name == 'add-to-queue' &&
+      contains(github.event.issue.labels.*.name, 'topic-suggestions') &&
+      github.event.issue.user.login == 'github-actions[bot]' &&
+      github.actor == github.repository_owner &&
+      github.event.issue.state == 'open'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v7
+        with:
+          ref: main
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Add the ticked topics to the queue
+        id: add
+        # The issue body arrives only through this environment variable. It is never part of the script text.
+        env:
+          ISSUE_BODY: ${{ github.event.issue.body }}
+        run: |
+          # Writes the manifest (new file paths, one per line; empty when nothing was queued) and the
+          # comment body. Both go to the runner's temporary folder, outside the repository.
+          python -m verticals queue-add --body-env ISSUE_BODY \
+            --manifest "$RUNNER_TEMP/add-topics-manifest.txt" \
+            --comment-out "$RUNNER_TEMP/add-topics-comment.md"
+
+      - name: Commit and push the new queue files
+        id: push
+        # Only the files named in the manifest are added. The run fails if the push fails twice.
+        run: |
+          manifest="$RUNNER_TEMP/add-topics-manifest.txt"
+          if [ ! -s "$manifest" ]; then
+            echo "No new queue files, so there is nothing to commit or push."
+            echo "queued=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          count=0
+          while IFS= read -r file || [ -n "$file" ]; do
+            if [ -z "$file" ]; then continue; fi
+            if ! [[ "$file" =~ ^queue/pending/[A-Za-z0-9._-]+\.json$ ]]; then
+              echo "::error::Refusing to add a path from the manifest that is not a queue/pending file."
+              exit 1
+            fi
+            git add -- "$file"
+            count=$((count + 1))
+          done < "$manifest"
+          git commit -m "Queue: add $count topics from suggestion issue #$ISSUE_NUMBER"
+
+          push_queue() {
+            git pull --rebase origin main && git push
+          }
+          if ! push_queue; then
+            echo "The first pull and push failed. Trying once more."
+            git rebase --abort >/dev/null 2>&1 || true
+            if ! push_queue; then
+              git rebase --abort >/dev/null 2>&1 || true
+              echo "::error::Could not push the new queue files after two tries. Nothing was marked as queued, and the issue was not commented on or closed."
+              exit 1
+            fi
+          fi
+          echo "Pushed $count new queue file(s)."
+          echo "queued=true" >> "$GITHUB_OUTPUT"
+
+      - name: Comment on the issue and close it
+        if: steps.push.outputs.queued == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if ! gh issue comment "$ISSUE_NUMBER" --body-file "$RUNNER_TEMP/add-topics-comment.md"; then
+            echo "::error::The new queue files were pushed, but the comment on issue #$ISSUE_NUMBER failed. The issue was left open."
+            exit 1
+          fi
+          if ! gh issue close "$ISSUE_NUMBER"; then
+            echo "::error::The new queue files were pushed and commented on, but closing issue #$ISSUE_NUMBER failed."
+            exit 1
+          fi
+          echo "Commented on and closed issue #$ISSUE_NUMBER."
+
+      - name: Comment on the issue and remove the label when nothing was queued
+        if: steps.push.outputs.queued == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          failed=0
+          gh issue comment "$ISSUE_NUMBER" --body-file "$RUNNER_TEMP/add-topics-comment.md" || failed=1
+          # Removing the label lets it be added again later. The issue stays open.
+          gh issue edit "$ISSUE_NUMBER" --remove-label add-to-queue || failed=1
+          if [ "$failed" -ne 0 ]; then
+            echo "::error::Could not comment on issue #$ISSUE_NUMBER or remove the add-to-queue label."
+          fi
+          exit "$failed"

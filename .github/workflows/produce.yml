@@ -175,6 +175,11 @@ jobs:
               else
                 echo "Label topic-suggestions was not created (it may already exist)."
               fi
+              if gh label create add-to-queue --description "Add the ticked topics to the queue" --color 1D76DB > /dev/null 2>&1; then
+                echo "Created label add-to-queue."
+              else
+                echo "Label add-to-queue was not created (it may already exist)."
+              fi
               if gh issue create --title "$TITLE" --body-file "$body_file" --assignee "$OWNER" --label topic-suggestions; then
                 echo "Created issue \"$TITLE\" with topic ideas, assigned to $OWNER."
                 exit 0
