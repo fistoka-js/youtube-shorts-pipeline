@@ -19,7 +19,7 @@ concurrency:
 jobs:
   produce:
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 45
     env:
       VERTICALS_SKILL_DIR: ${{ github.workspace }}/.verticals
       VARIATION_HISTORY_PATH: ${{ github.workspace }}/queue/variation_history.json
@@ -38,7 +38,34 @@ jobs:
           python-version: "3.12"
 
       - name: Install ffmpeg
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+        run: |
+          # Up to 3 attempts. Each attempt is capped at 4 minutes; if apt ignores the stop signal,
+          # it is force-stopped 15 seconds later (sudo timeout runs as root, so it can stop apt).
+          # Attempts 2 and 3 first point apt at the main Ubuntu archive (archive.ubuntu.com),
+          # because the runner's Azure mirror was very slow on some days.
+          for attempt in 1 2 3; do
+            if [ "$attempt" -eq 1 ]; then
+              echo "ffmpeg install: attempt 1 of 3"
+            else
+              echo "ffmpeg install: attempt $attempt of 3 (trying to switch apt to archive.ubuntu.com)"
+              # A killed attempt can leave dpkg half-configured; finish that first, capped at 60 seconds
+              # (force-stopped 15 seconds later if it ignores the stop signal).
+              # Failures are ignored.
+              sudo timeout --kill-after=15 60 dpkg --configure -a || true
+              # Point apt's sources files at the main Ubuntu archive instead of the Azure mirror.
+              # Failures are ignored; the retry still runs.
+              sudo sed -i 's|http://azure\.archive\.ubuntu\.com/ubuntu/|https://archive.ubuntu.com/ubuntu/|g; s|mirror+file:/etc/apt/apt-mirrors\.txt|https://archive.ubuntu.com/ubuntu/|g' /etc/apt/sources.list /etc/apt/sources.list.d/*.sources || true
+            fi
+            if sudo timeout --kill-after=15 240 bash -c 'apt-get update && apt-get install -y ffmpeg'; then
+              echo "ffmpeg install: succeeded on attempt $attempt"
+              exit 0
+            fi
+            echo "ffmpeg install: attempt $attempt failed or timed out"
+            # Pause before the next attempt only (not after the last one).
+            if [ "$attempt" -lt 3 ]; then sleep 10; fi
+          done
+          echo "::error::ffmpeg install failed after 3 attempts"
+          exit 1
 
       - name: Install Python dependencies
         run: pip install -r requirements.txt -c constraints-ci.txt

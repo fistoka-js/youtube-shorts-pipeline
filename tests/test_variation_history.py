@@ -12,6 +12,10 @@ replaced with a fake so nothing is written to the logs folder.
 import json
 import os
 import random
+import re
+import shlex
+import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -547,6 +551,309 @@ class TestWorkflowFile(unittest.TestCase):
         commit_index = next(i for i, line in enumerate(lines) if "git commit" in line)
         self.assertLess(commit_index, lines.index(pull))
         self.assertLess(lines.index(pull), lines.index("git push"))
+
+    def _ffmpeg_run(self):
+        steps = {s.get("name"): s for s in self.data["jobs"]["produce"]["steps"]}
+        return steps["Install ffmpeg"]["run"]
+
+    def test_ffmpeg_step_retry_loop_timeout_and_exits(self):
+        run = self._ffmpeg_run()
+        self.assertRegex(run, r"for attempt in (1 2 3|\$\(seq 1 3\)|\{1\.\.3\})")
+        self.assertIn("sudo timeout --kill-after=15 240 bash -c 'apt-get update && apt-get install -y ffmpeg'", run)
+        self.assertIn('echo "ffmpeg install: succeeded on attempt $attempt"', run)
+        self.assertIn("::error::ffmpeg install failed after 3 attempts", run)
+
+    def test_ffmpeg_step_mirror_switch_text_targets_and_flags(self):
+        # What the sed really does is checked by TestMirrorSwitchSed; where it runs by TestFfmpegStepBehaviour.
+        run = self._ffmpeg_run()
+        sed = re.search(r"sudo sed -i [^\n]*\|\| true", run)
+        self.assertIsNotNone(sed)
+        line = sed.group(0)
+        self.assertIn(r"mirror+file:/etc/apt/apt-mirrors\.txt", line)
+        self.assertIn(r"azure\.archive\.ubuntu\.com", line)
+        self.assertIn("https://archive.ubuntu.com/ubuntu/", line)
+        self.assertRegex(line, r" /etc/apt/sources\.list /etc/apt/sources\.list\.d/\*\.sources \|\| true$")
+        self.assertEqual(len(re.findall(r"s\|[^|']*\|[^|']*\|g", line)), 2)
+
+    def test_ffmpeg_step_messages_and_guarded_repairs(self):
+        run = self._ffmpeg_run()
+        self.assertIn("ffmpeg install: attempt 1 of 3", run)
+        self.assertIn("failed or timed out", run)
+        self.assertRegex(run, r"sudo timeout --kill-after=15 60 dpkg --configure -a \|\| true")
+
+    def test_ffmpeg_step_does_not_skip_recommends(self):
+        self.assertNotIn("--no-install-recommends", self._ffmpeg_run())
+
+    def test_produce_job_timeout_is_45_minutes(self):
+        self.assertEqual(self.data["jobs"]["produce"]["timeout-minutes"], 45)
+
+
+def _find_bash():
+    """Return a Git Bash (or Linux bash) that can run the step, or None. Never the WSL launcher."""
+    if os.name != "nt":
+        candidates = [shutil.which("bash")]
+    else:
+        candidates = [
+            r"C:\Program Files\Git\bin\bash.exe",
+            r"C:\Program Files (x86)\Git\bin\bash.exe",
+        ]
+        if os.environ.get("LOCALAPPDATA"):
+            candidates.append(os.path.join(os.environ["LOCALAPPDATA"], "Programs", "Git", "bin", "bash.exe"))
+        git = shutil.which("git")  # e.g. ...\Git\cmd\git.exe -> ...\Git\bin\bash.exe
+        if git:
+            candidates.append(os.path.join(os.path.dirname(os.path.dirname(git)), "bin", "bash.exe"))
+    for candidate in candidates:
+        if not candidate or not os.path.exists(candidate) or "system32" in candidate.lower():
+            continue
+        try:
+            result = subprocess.run([candidate, "-c", "echo ok"], capture_output=True, text=True, timeout=30)
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if result.returncode == 0 and "ok" in result.stdout:
+            return candidate
+    return None
+
+
+_BASH_FOUND = []
+
+
+def _bash():
+    """Find bash the first time a test needs it, not at import time."""
+    if not _BASH_FOUND:
+        _BASH_FOUND.append(_find_bash())
+    return _BASH_FOUND[0]
+
+
+# Fake commands. Each one prints a tagged line so the test can see what the step really did.
+# Fake sudo just runs its arguments, so the fake sed/dpkg/timeout/sleep are what actually run.
+# Env switches: APT_FAIL_CALLS (apt update fails on the first N calls), SED_FAIL and DPKG_FAIL
+# (those fail when set), TIMEOUT_RC with TIMEOUT_RC_CALLS (the first N apt timeouts return that code).
+FAKE_COMMANDS = {
+    # The fake sudo marks the command it runs as root.
+    "sudo": 'FAKE_SUDO=1 exec "$@"\n',
+    # The timeout fake reports its kill-after and duration, and marks commands it wraps as bounded.
+    "timeout": (
+        'KA=""\n'
+        'while [ "${1#--}" != "$1" ]; do\n'
+        '  case "$1" in --kill-after=*) KA="${1#--kill-after=}";; esac\n'
+        "  shift\n"
+        "done\n"
+        'SECS="$1"; shift\n'
+        'echo "[fake timeout] kill=$KA secs=$SECS cmd=$1"\n'
+        'case "$*" in *apt-get*) if [ -n "$TIMEOUT_RC" ]; then\n'
+        '  n=$(cat "$FAKE_DIR/timeout_count" 2>/dev/null || echo 0)\n'
+        '  n=$((n+1)); echo "$n" > "$FAKE_DIR/timeout_count"\n'
+        '  if [ "$n" -le "${TIMEOUT_RC_CALLS:-0}" ]; then echo "[fake timeout] exit $TIMEOUT_RC"; exit "$TIMEOUT_RC"; fi\n'
+        "fi;; esac\n"
+        'FAKE_BOUNDED=1 exec "$@"\n'
+    ),
+    # apt-get refuses to run unless started through the fake sudo, and it accepts only the approved
+    # `install -y ffmpeg`. Every call reports whether it ran under the fake timeout (bounded=yes or no).
+    "apt-get": (
+        'if [ -z "$FAKE_SUDO" ]; then echo "[fake apt-get] $1 not root"; exit 1; fi\n'
+        'echo "[fake apt-get] $1 bounded=${FAKE_BOUNDED:-no}"\n'
+        'if [ "$1" = update ]; then\n'
+        '  n=$(cat "$FAKE_DIR/apt_count" 2>/dev/null || echo 0)\n'
+        '  n=$((n+1)); echo "$n" > "$FAKE_DIR/apt_count"\n'
+        '  if [ "$n" -le "$APT_FAIL_CALLS" ]; then echo "[fake apt-get] update failed"; exit 1; fi\n'
+        "  exit 0\n"
+        "fi\n"
+        'if [ "$*" != "install -y ffmpeg" ]; then echo "[fake apt-get] install args rejected: $*"; exit 1; fi\n'
+        "exit 0\n"
+    ),
+    "dpkg": 'echo "[fake dpkg] $*"\nif [ -n "$DPKG_FAIL" ]; then exit 1; fi\nexit 0\n',
+    "sed": 'echo "[fake sed] $*"\nif [ -n "$SED_FAIL" ]; then exit 1; fi\nexit 0\n',
+    "sleep": 'echo "[fake sleep] $*"\nexit 0\n',
+}
+
+
+def _posix_path(path):
+    """Turn a Windows path into the /c/... form Git Bash uses inside scripts."""
+    text = str(path)
+    if os.name != "nt":
+        return text
+    return "/" + text[0].lower() + text[2:].replace("\\", "/")
+
+
+class TestFfmpegStepBehaviour(unittest.TestCase):
+    """Runs the real Install ffmpeg step under bash -e with fake commands and checks what happened."""
+
+    @classmethod
+    def setUpClass(cls):
+        if _bash() is None:
+            raise unittest.SkipTest("no usable bash (Git Bash on Windows) found; behaviour tests skipped")
+        with WORKFLOW.open("r", encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+        steps = {s.get("name"): s for s in data["jobs"]["produce"]["steps"]}
+        cls.step_text = steps["Install ffmpeg"]["run"]
+
+    def _run_step(self, apt_fail_calls=0, **extra_env):
+        bash = _bash()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_dir = root / "bin"
+            fake_dir.mkdir()
+            for name, body in FAKE_COMMANDS.items():
+                with (fake_dir / name).open("w", encoding="utf-8", newline="\n") as f:
+                    f.write("#!/bin/bash\n" + body)
+            fake_posix = _posix_path(fake_dir)
+            harness = (
+                f'export FAKE_DIR="{fake_posix}"\n'
+                f'export PATH="{fake_posix}:$PATH"\n'
+                f'chmod +x "{fake_posix}"/*\n'
+                + self.step_text
+            )
+            harness_file = root / "step.sh"
+            with harness_file.open("w", encoding="utf-8", newline="\n") as f:
+                f.write(harness)
+            env = dict(os.environ, APT_FAIL_CALLS=str(apt_fail_calls))
+            for key in ("SED_FAIL", "DPKG_FAIL", "TIMEOUT_RC", "TIMEOUT_RC_CALLS", "FAKE_SUDO", "FAKE_BOUNDED"):
+                env.pop(key, None)
+            env.update({key: str(value) for key, value in extra_env.items()})
+            return subprocess.run(
+                [bash, "-e", _posix_path(harness_file)],
+                capture_output=True, text=True, timeout=120, env=env,
+            )
+
+    @staticmethod
+    def _events(output):
+        """The order of the step's messages and fake commands, reduced to short tags."""
+        events = []
+        for line in output.splitlines():
+            if re.search(r"ffmpeg install: attempt \d of 3", line):
+                events.append("start" + re.search(r"attempt (\d) of 3", line).group(1))
+            elif re.search(r"ffmpeg install: attempt \d failed", line):
+                events.append("failed" + re.search(r"attempt (\d) failed", line).group(1))
+            elif re.search(r"ffmpeg install: succeeded on attempt \d", line):
+                events.append("succeeded" + re.search(r"attempt (\d)", line).group(1))
+            elif "::error::ffmpeg install failed after 3 attempts" in line:
+                events.append("error")
+            elif "[fake apt-get]" in line and "not root" in line:
+                events.append("NOT_ROOT")
+            elif "[fake apt-get]" in line and "bounded=no" in line:
+                events.append("UNBOUNDED")
+            elif "[fake sed]" in line:
+                events.append("sed")
+            elif "[fake dpkg]" in line:
+                events.append("dpkg")
+            elif "[fake sleep]" in line:
+                events.append("sleep")
+        return events
+
+    @staticmethod
+    def _tagged(output, tag):
+        """The text after each '[fake <tag>] ' marker, in order (e.g. the sleep durations)."""
+        marker = f"[fake {tag}] "
+        return [line.split(marker, 1)[1] for line in output.splitlines() if marker in line]
+
+    def test_first_try_success_never_switches_mirror_or_sleeps(self):
+        result = self._run_step(apt_fail_calls=0)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self._events(result.stdout), ["start1", "succeeded1"])
+        self.assertEqual(self._tagged(result.stdout, "timeout"), ["kill=15 secs=240 cmd=bash"])
+        self.assertEqual(self._tagged(result.stdout, "sleep"), [])
+
+    def test_two_failures_then_success_switches_on_attempts_two_and_three_only(self):
+        result = self._run_step(apt_fail_calls=2)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self._events(result.stdout), [
+            "start1", "failed1", "sleep",
+            "start2", "dpkg", "sed", "failed2", "sleep",
+            "start3", "dpkg", "sed", "succeeded3",
+        ])
+        self.assertEqual(self._tagged(result.stdout, "timeout"), [
+            "kill=15 secs=240 cmd=bash",
+            "kill=15 secs=60 cmd=dpkg", "kill=15 secs=240 cmd=bash",
+            "kill=15 secs=60 cmd=dpkg", "kill=15 secs=240 cmd=bash",
+        ])
+        self.assertEqual(self._tagged(result.stdout, "sleep"), ["10", "10"])
+
+    def test_every_attempt_failing_exits_1_and_does_not_sleep_after_the_last(self):
+        result = self._run_step(apt_fail_calls=99)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(self._events(result.stdout), [
+            "start1", "failed1", "sleep",
+            "start2", "dpkg", "sed", "failed2", "sleep",
+            "start3", "dpkg", "sed", "failed3", "error",
+        ])
+        self.assertEqual(self._tagged(result.stdout, "sleep"), ["10", "10"])
+
+    def test_failing_sed_and_dpkg_are_ignored_under_bash_e(self):
+        result = self._run_step(apt_fail_calls=2, SED_FAIL=1, DPKG_FAIL=1)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self._events(result.stdout), [
+            "start1", "failed1", "sleep",
+            "start2", "dpkg", "sed", "failed2", "sleep",
+            "start3", "dpkg", "sed", "succeeded3",
+        ])
+
+    def test_timeout_exit_codes_124_and_137_count_as_failed_attempts(self):
+        for code in (124, 137):
+            with self.subTest(code=code):
+                result = self._run_step(TIMEOUT_RC=code, TIMEOUT_RC_CALLS=1)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(self._events(result.stdout), [
+                    "start1", "failed1", "sleep",
+                    "start2", "dpkg", "sed", "succeeded2",
+                ])
+                result = self._run_step(TIMEOUT_RC=code, TIMEOUT_RC_CALLS=99)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertEqual(self._events(result.stdout)[-1], "error")
+
+
+class TestMirrorSwitchSed(unittest.TestCase):
+    """Runs the real mirror-switch sed from the step on sample apt source files (no fakes)."""
+
+    DEB822_BEFORE = (
+        "# mirrors: mirror+file:/etc/apt/apt-mirrors.txt mirror+file:/etc/apt/apt-mirrors.txt\n"
+        "Types: deb\nURIs: mirror+file:/etc/apt/apt-mirrors.txt\nSuites: noble noble-updates\nComponents: main\n\n"
+        "Types: deb\nURIs: http://azure.archive.ubuntu.com/ubuntu/\nSuites: noble-backports\n\n"
+        "Types: deb\nURIs: https://security.ubuntu.com/ubuntu/\nSuites: noble-security\n"
+    )
+    DEB822_AFTER = (
+        "# mirrors: https://archive.ubuntu.com/ubuntu/ https://archive.ubuntu.com/ubuntu/\n"
+        "Types: deb\nURIs: https://archive.ubuntu.com/ubuntu/\nSuites: noble noble-updates\nComponents: main\n\n"
+        "Types: deb\nURIs: https://archive.ubuntu.com/ubuntu/\nSuites: noble-backports\n\n"
+        "Types: deb\nURIs: https://security.ubuntu.com/ubuntu/\nSuites: noble-security\n"
+    )
+    LIST_BEFORE = (
+        "# mirrors: http://azure.archive.ubuntu.com/ubuntu/ http://azure.archive.ubuntu.com/ubuntu/\n"
+        "deb http://azure.archive.ubuntu.com/ubuntu/ noble main\n"
+    )
+    LIST_AFTER = (
+        "# mirrors: https://archive.ubuntu.com/ubuntu/ https://archive.ubuntu.com/ubuntu/\n"
+        "deb https://archive.ubuntu.com/ubuntu/ noble main\n"
+    )
+
+    @classmethod
+    def setUpClass(cls):
+        if _bash() is None:
+            raise unittest.SkipTest("no usable bash (Git Bash on Windows) found; sed tests skipped")
+        with WORKFLOW.open("r", encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+        steps = {s.get("name"): s for s in data["jobs"]["produce"]["steps"]}
+        sed = re.search(r"sudo sed -i [^\n]*\|\| true", steps["Install ffmpeg"]["run"])
+        assert sed is not None, "mirror-switch sed line not found in the Install ffmpeg step"
+        cls.sed_line = sed.group(0)
+
+    def test_real_sed_rewrites_both_layouts_and_nothing_else_and_is_repeatable(self):
+        # The folder name has a space on purpose, so the test also covers paths like "John Smith".
+        with tempfile.TemporaryDirectory(prefix="mirror sed ") as tmp:
+            root = Path(tmp)
+            (root / "ubuntu.sources").write_text(self.DEB822_BEFORE, encoding="utf-8", newline="\n")
+            (root / "sources.list").write_text(self.LIST_BEFORE, encoding="utf-8", newline="\n")
+            # Same command as the step, with the real apt paths pointed at the sample files.
+            cmd = self.sed_line[len("sudo "):].replace(" || true", "")
+            posix_root = shlex.quote(_posix_path(root))
+            cmd = cmd.replace("/etc/apt/sources.list.d/*.sources", f"{posix_root}/*.sources")
+            cmd = cmd.replace(" /etc/apt/sources.list ", f" {posix_root}/sources.list ")
+            self.assertNotIn("/etc/apt/sources", cmd)
+            for run_number in (1, 2):
+                with self.subTest(run=run_number):
+                    result = subprocess.run([_bash(), "-c", cmd], capture_output=True, text=True, timeout=60)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual((root / "ubuntu.sources").read_text(encoding="utf-8"), self.DEB822_AFTER)
+                    self.assertEqual((root / "sources.list").read_text(encoding="utf-8"), self.LIST_AFTER)
 
 
 if __name__ == "__main__":
