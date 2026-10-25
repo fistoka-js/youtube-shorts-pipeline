@@ -388,6 +388,23 @@ verticals/
 └── requirements.txt
 ```
 
+## Getting topic ideas
+
+There are two ways to get a list of 20 topic ideas. Both use the same suggester.
+
+- **Automatically, when the queue is low.** The "Queue low: add topics" issue now also lists 20 ideas as checkboxes.
+- **By hand.** On github.com, open **Actions**, pick **Suggest topics**, and click **Run workflow**. This opens a "Topic suggestions" issue with 20 ideas.
+
+Each idea has a footage note, which says how much stock video is available for it:
+
+- **footage: good** means Pexels returned 10 or more stock clips for the idea's search.
+- **footage: thin** means it returned fewer than 10.
+- **footage: unknown** means the check could not run.
+
+Each new suggestion makes one call to the language model and costs roughly 2 to 4 cents.
+
+Turning the ticked ideas into queue files is the next step, and it is not built yet. The `add-to-queue` label on the issue does nothing yet. Until the next step is built, add a ticked topic by hand as described in [Adding topics and the low-queue issue](#adding-topics-and-the-low-queue-issue).
+
 ## Adding topics and the low-queue issue
 
 To add a topic, create a new file in `queue/pending/`. The file must contain exactly ONE line, in this format:

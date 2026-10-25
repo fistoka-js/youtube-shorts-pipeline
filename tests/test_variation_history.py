@@ -873,26 +873,72 @@ class TestMirrorSwitchSed(unittest.TestCase):
 
 # Fake gh: logs every call to gh_calls.log. It prints the open-issue number that the step's --jq
 # filter would print (FAKE_GH_LIST), because real gh applies --jq itself and there is no jq here.
+# Fake gh. Every call is logged to gh_calls.log. "issue list" with --label topic-suggestions returns
+# FAKE_GH_PAST (the past suggestion bodies); any other list returns FAKE_GH_LIST (open issue numbers).
+# Switches: FAKE_GH_LIST_FAIL, FAKE_GH_PAST_FAIL, FAKE_GH_CREATE_FAIL_ASSIGNEE, FAKE_GH_CREATE_FAIL_LABEL,
+# FAKE_GH_LABEL_FAIL. When "issue create" gets --body-file, a copy of that file is kept in last_body.md.
 FAKE_GH = r'''#!/bin/bash
 echo "$*" >> "$FAKE_DIR/gh_calls.log"
 case "$1 $2" in
   "issue list")
     if [ -n "$FAKE_GH_LIST_FAIL" ]; then echo "fake gh: list failed" >&2; exit 1; fi
-    printf '%s' "$FAKE_GH_LIST"
+    case "$*" in
+      *"--label topic-suggestions"*)
+        if [ -n "$FAKE_GH_PAST_FAIL" ]; then echo "fake gh: past list failed" >&2; exit 1; fi
+        printf '%s' "$FAKE_GH_PAST"
+        ;;
+      *)
+        printf '%s' "$FAKE_GH_LIST"
+        ;;
+    esac
     ;;
   "issue create")
     if [ -n "$FAKE_GH_CREATE_FAIL_ASSIGNEE" ] && [[ "$*" == *--assignee* ]]; then
       echo "fake gh: assignee rejected" >&2; exit 1
     fi
+    if [ -n "$FAKE_GH_CREATE_FAIL_LABEL" ] && [[ "$*" == *--label* ]]; then
+      echo "fake gh: label rejected" >&2; exit 1
+    fi
+    prev=""
+    for a in "$@"; do
+      if [ "$prev" = "--body-file" ]; then cp "$a" "$FAKE_DIR/last_body.md"; fi
+      prev="$a"
+    done
     echo "https://github.com/jacob/youtube-shorts-pipeline/issues/99"
     ;;
   "issue close")
     echo "fake gh: closed $3"
     ;;
+  "label create")
+    if [ -n "$FAKE_GH_LABEL_FAIL" ]; then echo "fake gh: label already exists" >&2; exit 1; fi
+    echo "fake gh: label created"
+    ;;
   *)
     echo "fake gh: unexpected call: $*" >&2; exit 1
     ;;
 esac
+'''
+
+# Fake python for the suggest step. Only "python -m verticals suggest ..." is accepted; anything else
+# fails loudly, so a real python (and a real LLM call) can never run from these tests. It logs its
+# arguments, keeps a copy of the --exclude-file as exclude_seen.txt, and writes FAKE_PY_CONTENT to the
+# --out file only when FAKE_PY_SUGGEST is "ok". Otherwise it fails and writes nothing.
+FAKE_PYTHON = r'''#!/bin/bash
+echo "$*" >> "$FAKE_DIR/python_calls.log"
+if [ "$1" != "-m" ] || [ "$2" != "verticals" ] || [ "$3" != "suggest" ]; then
+  echo "fake python: unexpected call: $*" >&2; exit 1
+fi
+shift 3
+out=""
+prev=""
+for a in "$@"; do
+  if [ "$prev" = "--exclude-file" ]; then cp "$a" "$FAKE_DIR/exclude_seen.txt"; fi
+  if [ "$prev" = "--out" ]; then out="$a"; fi
+  prev="$a"
+done
+if [ "$FAKE_PY_SUGGEST" != "ok" ]; then echo "fake python: suggest failed" >&2; exit 1; fi
+printf '%s\n' "$FAKE_PY_CONTENT" > "$out"
+exit 0
 '''
 
 
@@ -908,14 +954,23 @@ class TestQueueWarnStepBehaviour(unittest.TestCase):
         steps = {s.get("name"): s for s in data["jobs"]["produce"]["steps"]}
         cls.step_text = steps["Warn if the queue is low"]["run"]
 
+    # Environment switches the fakes read. Each run starts with all of them unset.
+    FAKE_SWITCHES = (
+        "FAKE_GH_LIST_FAIL", "FAKE_GH_CREATE_FAIL_ASSIGNEE", "FAKE_GH_PAST", "FAKE_GH_PAST_FAIL",
+        "FAKE_GH_CREATE_FAIL_LABEL", "FAKE_GH_LABEL_FAIL", "FAKE_PY_SUGGEST", "FAKE_PY_CONTENT",
+    )
+
     def _run_step(self, files=(), open_issue="", **extra_env):
-        """Returns (result, gh call lines). Files are created in queue/pending/ of a temp folder."""
+        """Returns (result, gh call lines). Files are created in queue/pending/ of a temp folder.
+        Also sets self.artifacts: the body file gh was given, the exclusion file python was given,
+        and the python call log (each None when it was not written)."""
         bash = _bash()
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             fake_dir = root / "bin"
             fake_dir.mkdir()
             (fake_dir / "gh").write_text(FAKE_GH, encoding="utf-8", newline="\n")
+            (fake_dir / "python").write_text(FAKE_PYTHON, encoding="utf-8", newline="\n")
             work = root / "work"
             pending = work / "queue" / "pending"
             pending.mkdir(parents=True)
@@ -925,7 +980,7 @@ class TestQueueWarnStepBehaviour(unittest.TestCase):
             harness = (
                 f'export FAKE_DIR="{fake_posix}"\n'
                 f'export PATH="{fake_posix}:$PATH"\n'
-                f'chmod +x "{fake_posix}/gh"\n'
+                f'chmod +x "{fake_posix}/gh" "{fake_posix}/python"\n'
                 f'cd "{_posix_path(work)}"\n'
                 + self.step_text
             )
@@ -933,7 +988,7 @@ class TestQueueWarnStepBehaviour(unittest.TestCase):
             with harness_file.open("w", encoding="utf-8", newline="\n") as f:
                 f.write(harness)
             env = dict(os.environ)
-            for key in ("FAKE_GH_LIST_FAIL", "FAKE_GH_CREATE_FAIL_ASSIGNEE"):
+            for key in self.FAKE_SWITCHES:
                 env.pop(key, None)
             env.update({
                 "OWNER": "jacob-test",
@@ -948,6 +1003,16 @@ class TestQueueWarnStepBehaviour(unittest.TestCase):
             )
             log = fake_dir / "gh_calls.log"
             calls = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+
+            def _read(name):
+                path = fake_dir / name
+                return path.read_text(encoding="utf-8") if path.exists() else None
+
+            self.artifacts = {
+                "body": _read("last_body.md"),
+                "exclude": _read("exclude_seen.txt"),
+                "python_calls": _read("python_calls.log"),
+            }
             return result, calls
 
     @staticmethod
@@ -970,12 +1035,17 @@ class TestQueueWarnStepBehaviour(unittest.TestCase):
         self.assertEqual(self._closes(calls), [])
 
     def test_list_call_matches_title_exactly_and_uses_limit_100(self):
+        # A new issue is about to be created, so the step also lists past topic-suggestion issues.
         _, calls = self._run_step(files=["001-a.json"])
         lists = [c for c in calls if c.startswith("issue list")]
-        self.assertEqual(len(lists), 1, calls)
+        self.assertEqual(len(lists), 2, calls)
         self.assertIn("--state open", lists[0])
         self.assertIn("--limit 100", lists[0])
         self.assertIn('select(.title == "Queue low: add topics")', lists[0])
+        self.assertIn("--label topic-suggestions", lists[1])
+        self.assertIn("--state all", lists[1])
+        self.assertIn("--limit 100", lists[1])
+        self.assertIn("--json body", lists[1])
 
     def test_three_files_and_open_issue_closes_it(self):
         result, calls = self._run_step(files=["001-a.json", "002-b.json", "003-c.json"], open_issue="42")
@@ -1017,6 +1087,134 @@ class TestQueueWarnStepBehaviour(unittest.TestCase):
         self.assertEqual(self._creates(calls), [])
         self.assertEqual(self._closes(calls), [])
         self.assertIn("Could not list open issues", result.stdout)
+
+    # ── Topic ideas in the new "Queue low" issue (the suggest step) ──────────────
+
+    PAST_BODIES = (
+        "Topic ideas from a past run.\n\n"
+        "- [x] old topic | how things work | footage: good\n"
+        "- [ ] Another old one? | what happens when scenarios | footage: thin\n"
+        "not a checklist line\n"
+    )
+    IDEAS_CONTENT = (
+        "Tick the ideas you want by changing [ ] to [x].\n\n"
+        "- [ ] why do cats purr | animal and human behavior curiosities | footage: good\n"
+        "- [ ] how do bridges sway | how things work | footage: thin\n"
+    )
+
+    def test_new_issue_with_ideas_uses_body_file_label_and_assignee(self):
+        result, calls = self._run_step(
+            files=["001-a.json"], FAKE_PY_SUGGEST="ok", FAKE_PY_CONTENT=self.IDEAS_CONTENT,
+            FAKE_GH_PAST=self.PAST_BODIES,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        creates = self._creates(calls)
+        self.assertEqual(len(creates), 1, calls)
+        self.assertIn("--body-file", creates[0])
+        self.assertIn("--label topic-suggestions", creates[0])
+        self.assertIn("--assignee jacob-test", creates[0])
+        self.assertIn("--title Queue low: add topics", creates[0])
+        self.assertNotIn(" --body ", creates[0])
+        body = self.artifacts["body"]
+        self.assertIsNotNone(body, "gh issue create was not given a body file")
+        self.assertIn("Only 1 topic(s) are waiting in queue/pending/", body)
+        self.assertIn("README.md#adding-topics-and-the-low-queue-issue", body)
+        self.assertIn("- [ ] why do cats purr | animal and human behavior curiosities | footage: good", body)
+        self.assertIn("- [ ] how do bridges sway | how things work | footage: thin", body)
+        self.assertIn("Created issue", result.stdout)
+
+    def test_past_suggestion_topics_are_extracted_for_the_exclusion_file(self):
+        result, calls = self._run_step(
+            files=["001-a.json"], FAKE_PY_SUGGEST="ok", FAKE_PY_CONTENT=self.IDEAS_CONTENT,
+            FAKE_GH_PAST=self.PAST_BODIES,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        exclude = self.artifacts["exclude"]
+        self.assertIsNotNone(exclude, "suggest was not given an exclusion file")
+        # Ticked and unticked checklist lines give their topic; other lines are ignored.
+        self.assertEqual([line.strip() for line in exclude.splitlines()], ["old topic", "Another old one?"])
+        python_calls = self.artifacts["python_calls"]
+        self.assertIn("-m verticals suggest --exclude-file", python_calls)
+        self.assertIn("--out suggestions.md", python_calls)
+        lists = [c for c in calls if c.startswith("issue list")]
+        self.assertIn("--label topic-suggestions", lists[-1])
+
+    def test_suggest_failure_creates_the_plain_warning_issue(self):
+        result, calls = self._run_step(files=["001-a.json"])  # FAKE_PY_SUGGEST unset: suggest fails
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("did not produce ideas", result.stdout)
+        creates = self._creates(calls)
+        self.assertEqual(len(creates), 1, calls)
+        self.assertIn("--assignee jacob-test", creates[0])
+        self.assertIn(" --body ", creates[0])
+        self.assertIn("Only 1 topic(s) are waiting in queue/pending/", creates[0])
+        self.assertNotIn("--label", creates[0])
+        self.assertNotIn("--body-file", creates[0])
+        self.assertFalse(any(c.startswith("label create") for c in calls), calls)
+
+    def test_open_issue_does_not_run_suggest_or_create(self):
+        result, calls = self._run_step(
+            files=["001-a.json"], open_issue="42", FAKE_PY_SUGGEST="ok", FAKE_PY_CONTENT=self.IDEAS_CONTENT,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIsNone(self.artifacts["python_calls"], "suggest must not run when an issue is open")
+        self.assertEqual(self._creates(calls), [])
+        self.assertIn("Left alone: issue #42", result.stdout)
+
+    def test_label_failure_still_creates_the_issue_with_ideas(self):
+        result, calls = self._run_step(
+            files=["001-a.json"], FAKE_PY_SUGGEST="ok", FAKE_PY_CONTENT=self.IDEAS_CONTENT,
+            FAKE_GH_LABEL_FAIL="1",
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("was not created", result.stdout)
+        creates = self._creates(calls)
+        self.assertEqual(len(creates), 1, calls)
+        self.assertIn("--label topic-suggestions", creates[0])
+        self.assertIn("why do cats purr", self.artifacts["body"])
+
+    def test_failed_create_with_assignee_retries_with_ideas_without_assignee(self):
+        result, calls = self._run_step(
+            files=["001-a.json"], FAKE_PY_SUGGEST="ok", FAKE_PY_CONTENT=self.IDEAS_CONTENT,
+            FAKE_GH_CREATE_FAIL_ASSIGNEE="1",
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        creates = self._creates(calls)
+        self.assertEqual(len(creates), 2, calls)
+        self.assertIn("--assignee jacob-test", creates[0])
+        self.assertIn("--body-file", creates[0])
+        self.assertNotIn("--assignee", creates[1])
+        self.assertIn("--body-file", creates[1])
+        self.assertIn("--label topic-suggestions", creates[1])
+        self.assertIn("without an assignee", result.stdout)
+
+    def test_label_rejected_falls_back_to_the_plain_warning_issue(self):
+        result, calls = self._run_step(
+            files=["001-a.json"], FAKE_PY_SUGGEST="ok", FAKE_PY_CONTENT=self.IDEAS_CONTENT,
+            FAKE_GH_CREATE_FAIL_LABEL="1",
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        creates = self._creates(calls)
+        # Two attempts with the label (with and without assignee) both fail; then the plain issue.
+        self.assertEqual(len(creates), 3, calls)
+        self.assertIn("--label topic-suggestions", creates[0])
+        self.assertIn("--label topic-suggestions", creates[1])
+        self.assertNotIn("--label", creates[2])
+        self.assertIn("--assignee jacob-test", creates[2])
+        self.assertIn(" --body ", creates[2])
+        self.assertIn("Creating the issue with topic ideas failed", result.stdout)
+
+    def test_failed_past_list_suggests_with_an_empty_exclusion_file(self):
+        result, calls = self._run_step(
+            files=["001-a.json"], FAKE_PY_SUGGEST="ok", FAKE_PY_CONTENT=self.IDEAS_CONTENT,
+            FAKE_GH_PAST_FAIL="1",
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.artifacts["exclude"], "")
+        self.assertIn("Could not list past topic-suggestion issues", result.stdout)
+        creates = self._creates(calls)
+        self.assertEqual(len(creates), 1, calls)
+        self.assertIn("--label topic-suggestions", creates[0])
 
 
 if __name__ == "__main__":

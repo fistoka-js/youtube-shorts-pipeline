@@ -741,6 +741,17 @@ def cmd_voices(args):
             _print_voice_row(v)
 
 
+def cmd_suggest(args):
+    """Write the topic-suggestion checklist to --out. Exits 1 (and writes nothing) on failure."""
+    from pathlib import Path
+    from .suggest import run_suggest
+
+    exclude = Path(args.exclude_file) if args.exclude_file else None
+    code = run_suggest(Path(args.out), exclude_file=exclude)
+    if code:
+        sys.exit(code)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Verticals v3 — AI-Native Vertical Video Engine",
@@ -808,6 +819,12 @@ def main():
     p_voices = sub.add_parser("voices", help="List TTS voices (currently: 60db)")
     p_voices.add_argument("--provider", default="60db", help="TTS provider (only '60db' supported)")
 
+    # suggest (one LLM call; writes a checklist of 20 topic ideas)
+    p_suggest = sub.add_parser("suggest", help="Suggest 20 topic ideas as a checklist (one LLM call)")
+    p_suggest.add_argument("--exclude-file", default=None,
+                           help="Optional text file with one already-used topic per line (excluded from the ideas)")
+    p_suggest.add_argument("--out", required=True, help="File to write the checklist to (for example suggestions.md)")
+
     args = parser.parse_args()
 
     if args.verbose:
@@ -823,6 +840,9 @@ def main():
         return
     if args.cmd == "voices":
         cmd_voices(args)
+        return
+    if args.cmd == "suggest":
+        cmd_suggest(args)
         return
 
     maybe_run_setup(args)

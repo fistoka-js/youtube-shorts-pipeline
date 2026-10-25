@@ -44,3 +44,5 @@ debug_*.html
 # queue/pending and queue/done topic files ARE tracked - they're just
 # topic ideas/metadata, not secrets, and the GitHub Actions workflow
 # needs to see them when it checks out the repo fresh.
+# Topic suggestions written by the suggest step of the workflows (never commit)
+suggestions.md

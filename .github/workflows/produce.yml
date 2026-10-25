@@ -144,6 +144,48 @@ jobs:
               exit 0
             fi
             BODY="Only $count topic(s) are waiting in queue/pending/, and the minimum is 3. Add topics as described here: $LINK"
+
+            # Topic ideas for the new issue. A failure anywhere in this block only means the plain
+            # warning issue below is created instead, the same as before this block existed.
+            work=$(mktemp -d 2>/dev/null) || work=""
+            suggested=""
+            if [ -n "$work" ]; then
+              exclude="$work/exclude.txt"
+              past="$work/past.txt"
+              # Topics from earlier topic-suggestion issues (any state) are excluded. Only the text of the
+              # checklist lines is read; it is written to a file and never run as a command.
+              if gh issue list --label topic-suggestions --state all --limit 100 --json body --jq '.[].body' > "$past"; then
+                sed -n 's/^- \[[ xX]\] \([^|]*\) | .*$/\1/p' "$past" > "$exclude" || : > "$exclude"
+              else
+                echo "Could not list past topic-suggestion issues. Suggesting without an exclusion list."
+                : > "$exclude"
+              fi
+              rm -f suggestions.md
+              if python -m verticals suggest --exclude-file "$exclude" --out suggestions.md && [ -f suggestions.md ]; then
+                suggested=1
+              else
+                echo "The topic suggester did not produce ideas, so the plain warning issue is created."
+              fi
+            fi
+            if [ -n "$suggested" ]; then
+              body_file="$work/issue-body.md"
+              { printf '%s\n\n' "$BODY"; cat suggestions.md; } > "$body_file"
+              if gh label create topic-suggestions --description "Topic ideas suggested by the pipeline" --color 0E8A16 > /dev/null 2>&1; then
+                echo "Created label topic-suggestions."
+              else
+                echo "Label topic-suggestions was not created (it may already exist)."
+              fi
+              if gh issue create --title "$TITLE" --body-file "$body_file" --assignee "$OWNER" --label topic-suggestions; then
+                echo "Created issue \"$TITLE\" with topic ideas, assigned to $OWNER."
+                exit 0
+              fi
+              echo "Creating the issue with assignee $OWNER failed. Retrying without an assignee."
+              if gh issue create --title "$TITLE" --body-file "$body_file" --label topic-suggestions; then
+                echo "Created issue \"$TITLE\" with topic ideas, without an assignee."
+                exit 0
+              fi
+              echo "Creating the issue with topic ideas failed. Creating the plain warning issue instead."
+            fi
             if gh issue create --title "$TITLE" --body "$BODY" --assignee "$OWNER"; then
               echo "Created issue \"$TITLE\", assigned to $OWNER."
             else
