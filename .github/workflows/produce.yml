@@ -5,9 +5,11 @@ on:
   # schedule:
   #   - cron: "0 14 * * *"  # example: daily at 14:00 UTC, uncomment when ready
 
-# The run commits and pushes queue changes back to the branch, so it needs write access to the repo contents.
+# The run commits and pushes queue changes back to the branch (contents: write), and the last step
+# opens or closes the "Queue low: add topics" issue (issues: write).
 permissions:
   contents: write
+  issues: write
 
 # One run at a time: a second run waits for the first to finish (including its
 # commit and push) instead of overlapping. cancel-in-progress is false so a
@@ -110,3 +112,56 @@ jobs:
           git pull --rebase origin ${{ github.ref_name }}
           # Push the queue commit to the branch.
           git push
+
+      - name: Warn if the queue is low
+        if: always()
+        # Never fails the run: a problem here only means no issue was opened or closed.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          # Count the topic files waiting in queue/pending/ (only *.json; .gitkeep is not counted).
+          count=0
+          for f in queue/pending/*.json; do
+            if [ -f "$f" ]; then count=$((count + 1)); fi
+          done
+          echo "Queue check: $count topic(s) pending in queue/pending/."
+          TITLE="Queue low: add topics"
+          LINK="https://github.com/$GH_REPO/blob/main/README.md#adding-topics-and-the-low-queue-issue"
+
+          # Find the open issue with exactly this title. gh applies --jq itself, so no extra tool is needed.
+          if ! open=$(gh issue list --state open --limit 100 --json number,title --jq '.[] | select(.title == "Queue low: add topics") | .number'); then
+            echo "Could not list open issues, so no issue was created or closed."
+            exit 0
+          fi
+          number=$(printf '%s\n' "$open" | head -n 1)
+
+          if [ "$count" -lt 3 ]; then
+            if [ -n "$number" ]; then
+              echo "Left alone: issue #$number \"$TITLE\" is already open."
+              exit 0
+            fi
+            BODY="Only $count topic(s) are waiting in queue/pending/, and the minimum is 3. Add topics as described here: $LINK"
+            if gh issue create --title "$TITLE" --body "$BODY" --assignee "$OWNER"; then
+              echo "Created issue \"$TITLE\", assigned to $OWNER."
+            else
+              echo "Creating the issue with assignee $OWNER failed. Retrying without an assignee."
+              if gh issue create --title "$TITLE" --body "$BODY"; then
+                echo "Created issue \"$TITLE\" without an assignee."
+              else
+                echo "Could not create issue \"$TITLE\"."
+              fi
+            fi
+          else
+            if [ -n "$number" ]; then
+              if gh issue close "$number" --comment "Closing automatically: $count topics are now pending in queue/pending/ (3 or more)."; then
+                echo "Closed issue #$number: $count topics are pending."
+              else
+                echo "Could not close issue #$number."
+              fi
+            else
+              echo "Nothing to do: $count topics are pending and no open \"$TITLE\" issue exists."
+            fi
+          fi

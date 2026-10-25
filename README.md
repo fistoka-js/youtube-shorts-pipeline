@@ -388,6 +388,20 @@ verticals/
 └── requirements.txt
 ```
 
+## Adding topics and the low-queue issue
+
+To add a topic, create a new file in `queue/pending/`. The file must contain exactly ONE line, in this format:
+
+`{"topic": "why do we yawn", "niche": "science", "platform": "shorts"}`
+
+The words in this example line are only an example. Replace them with your own values. Name the file as described in "Naming queue files" below.
+
+On github.com, use **Add file** then **Create new file**, type `queue/pending/` and the file name in the name box, paste the one line, and click **Commit changes**.
+
+Note: these GitHub web-editor steps have not been tested yet.
+
+**The "Queue low: add topics" issue.** After each cloud run, the workflow counts the topic files in `queue/pending/`. If fewer than 3 are waiting, it opens an issue titled "Queue low: add topics". The issue is assigned to the repository owner, so GitHub sends a notification. On a later run, when 3 or more topics are pending, the workflow closes the issue by itself.
+
 ## Naming queue files
 
 Topics run in file-name order, and numbers are compared as numbers, so `test2` runs before `test9`, and `test9` runs before `test10`. The date a file was saved does not matter.

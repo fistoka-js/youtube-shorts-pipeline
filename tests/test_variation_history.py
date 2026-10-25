@@ -491,8 +491,9 @@ class TestWorkflowFile(unittest.TestCase):
     def test_concurrency_is_workflow_level_not_job_level(self):
         self.assertNotIn("concurrency", self.data["jobs"]["produce"])
 
-    def test_top_level_permissions_allow_contents_write(self):
-        self.assertEqual(self.data["permissions"], {"contents": "write"})
+    def test_top_level_permissions_allow_contents_and_issues_write(self):
+        # contents: write pushes the queue commit; issues: write opens or closes the low-queue issue.
+        self.assertEqual(self.data["permissions"], {"contents": "write", "issues": "write"})
 
     def test_variation_env_var_set_in_job_env(self):
         env = self.data["jobs"]["produce"]["env"]
@@ -517,6 +518,7 @@ class TestWorkflowFile(unittest.TestCase):
             "Write API keys to config",
             "Run queue orchestrator",
             "Commit queue state changes",
+            "Warn if the queue is low",
         ])
 
     def test_commit_step_still_stages_queue(self):
@@ -586,6 +588,19 @@ class TestWorkflowFile(unittest.TestCase):
 
     def test_produce_job_timeout_is_45_minutes(self):
         self.assertEqual(self.data["jobs"]["produce"]["timeout-minutes"], 45)
+
+    def test_warn_step_is_last_after_push_and_never_fails_run(self):
+        steps = self.data["jobs"]["produce"]["steps"]
+        self.assertEqual(steps[-2]["name"], "Commit queue state changes")
+        warn = steps[-1]
+        self.assertEqual(warn["name"], "Warn if the queue is low")
+        self.assertEqual(warn["if"], "always()")
+        self.assertIs(warn["continue-on-error"], True)
+        self.assertEqual(warn["env"]["GH_TOKEN"], "${{ github.token }}")
+        self.assertEqual(warn["env"]["GH_REPO"], "${{ github.repository }}")
+        self.assertEqual(warn["env"]["OWNER"], "${{ github.repository_owner }}")
+        # The script body takes repository values only through env:, never pasted in.
+        self.assertNotIn("${{", warn["run"])
 
 
 def _find_bash():
@@ -854,6 +869,154 @@ class TestMirrorSwitchSed(unittest.TestCase):
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                     self.assertEqual((root / "ubuntu.sources").read_text(encoding="utf-8"), self.DEB822_AFTER)
                     self.assertEqual((root / "sources.list").read_text(encoding="utf-8"), self.LIST_AFTER)
+
+
+# Fake gh: logs every call to gh_calls.log. It prints the open-issue number that the step's --jq
+# filter would print (FAKE_GH_LIST), because real gh applies --jq itself and there is no jq here.
+FAKE_GH = r'''#!/bin/bash
+echo "$*" >> "$FAKE_DIR/gh_calls.log"
+case "$1 $2" in
+  "issue list")
+    if [ -n "$FAKE_GH_LIST_FAIL" ]; then echo "fake gh: list failed" >&2; exit 1; fi
+    printf '%s' "$FAKE_GH_LIST"
+    ;;
+  "issue create")
+    if [ -n "$FAKE_GH_CREATE_FAIL_ASSIGNEE" ] && [[ "$*" == *--assignee* ]]; then
+      echo "fake gh: assignee rejected" >&2; exit 1
+    fi
+    echo "https://github.com/jacob/youtube-shorts-pipeline/issues/99"
+    ;;
+  "issue close")
+    echo "fake gh: closed $3"
+    ;;
+  *)
+    echo "fake gh: unexpected call: $*" >&2; exit 1
+    ;;
+esac
+'''
+
+
+class TestQueueWarnStepBehaviour(unittest.TestCase):
+    """Runs the real 'Warn if the queue is low' script under bash -e with a fake gh command."""
+
+    @classmethod
+    def setUpClass(cls):
+        if _bash() is None:
+            raise unittest.SkipTest("no usable bash (Git Bash on Windows) found; queue warning tests skipped")
+        with WORKFLOW.open("r", encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+        steps = {s.get("name"): s for s in data["jobs"]["produce"]["steps"]}
+        cls.step_text = steps["Warn if the queue is low"]["run"]
+
+    def _run_step(self, files=(), open_issue="", **extra_env):
+        """Returns (result, gh call lines). Files are created in queue/pending/ of a temp folder."""
+        bash = _bash()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_dir = root / "bin"
+            fake_dir.mkdir()
+            (fake_dir / "gh").write_text(FAKE_GH, encoding="utf-8", newline="\n")
+            work = root / "work"
+            pending = work / "queue" / "pending"
+            pending.mkdir(parents=True)
+            for name in files:
+                (pending / name).write_text('{"topic": "made up"}\n', encoding="utf-8", newline="\n")
+            fake_posix = _posix_path(fake_dir)
+            harness = (
+                f'export FAKE_DIR="{fake_posix}"\n'
+                f'export PATH="{fake_posix}:$PATH"\n'
+                f'chmod +x "{fake_posix}/gh"\n'
+                f'cd "{_posix_path(work)}"\n'
+                + self.step_text
+            )
+            harness_file = root / "step.sh"
+            with harness_file.open("w", encoding="utf-8", newline="\n") as f:
+                f.write(harness)
+            env = dict(os.environ)
+            for key in ("FAKE_GH_LIST_FAIL", "FAKE_GH_CREATE_FAIL_ASSIGNEE"):
+                env.pop(key, None)
+            env.update({
+                "OWNER": "jacob-test",
+                "GH_REPO": "jacob-test/youtube-shorts-pipeline",
+                "GH_TOKEN": "fake-token-for-tests",
+                "FAKE_GH_LIST": open_issue,
+            })
+            env.update({key: str(value) for key, value in extra_env.items()})
+            result = subprocess.run(
+                [bash, "-e", _posix_path(harness_file)],
+                capture_output=True, text=True, timeout=120, env=env,
+            )
+            log = fake_dir / "gh_calls.log"
+            calls = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+            return result, calls
+
+    @staticmethod
+    def _creates(calls):
+        return [c for c in calls if c.startswith("issue create")]
+
+    @staticmethod
+    def _closes(calls):
+        return [c for c in calls if c.startswith("issue close")]
+
+    def test_two_files_and_no_open_issue_creates_issue_assigned_to_owner(self):
+        result, calls = self._run_step(files=["001-a.json", "002-b.json"])
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("Queue check: 2 topic(s) pending", result.stdout)
+        creates = self._creates(calls)
+        self.assertEqual(len(creates), 1, calls)
+        self.assertIn("--title Queue low: add topics", creates[0])
+        self.assertIn("--assignee jacob-test", creates[0])
+        self.assertIn("README.md#adding-topics-and-the-low-queue-issue", creates[0])
+        self.assertEqual(self._closes(calls), [])
+
+    def test_list_call_matches_title_exactly_and_uses_limit_100(self):
+        _, calls = self._run_step(files=["001-a.json"])
+        lists = [c for c in calls if c.startswith("issue list")]
+        self.assertEqual(len(lists), 1, calls)
+        self.assertIn("--state open", lists[0])
+        self.assertIn("--limit 100", lists[0])
+        self.assertIn('select(.title == "Queue low: add topics")', lists[0])
+
+    def test_three_files_and_open_issue_closes_it(self):
+        result, calls = self._run_step(files=["001-a.json", "002-b.json", "003-c.json"], open_issue="42")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self._creates(calls), [])
+        closes = self._closes(calls)
+        self.assertEqual(len(closes), 1, calls)
+        self.assertTrue(closes[0].startswith("issue close 42 --comment"), closes[0])
+        self.assertIn("Closed issue #42", result.stdout)
+
+    def test_two_files_and_open_issue_does_nothing(self):
+        result, calls = self._run_step(files=["001-a.json", "002-b.json"], open_issue="42")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self._creates(calls), [])
+        self.assertEqual(self._closes(calls), [])
+        self.assertIn("Left alone: issue #42", result.stdout)
+
+    def test_gitkeep_is_not_counted(self):
+        # Two topics plus .gitkeep: counting .gitkeep would make 3 and close nothing, but the
+        # step must count 2 and open the issue.
+        result, calls = self._run_step(files=["001-a.json", "002-b.json", ".gitkeep"])
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("Queue check: 2 topic(s) pending", result.stdout)
+        self.assertEqual(len(self._creates(calls)), 1, calls)
+
+    def test_failed_create_with_assignee_retries_without_assignee(self):
+        result, calls = self._run_step(files=["001-a.json"], FAKE_GH_CREATE_FAIL_ASSIGNEE="1")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        creates = self._creates(calls)
+        self.assertEqual(len(creates), 2, calls)
+        self.assertIn("--assignee jacob-test", creates[0])
+        self.assertNotIn("--assignee", creates[1])
+        self.assertIn("--title Queue low: add topics", creates[1])
+        self.assertIn("Created issue", result.stdout)
+
+    def test_failed_issue_list_creates_and_closes_nothing(self):
+        result, calls = self._run_step(files=["001-a.json"], FAKE_GH_LIST_FAIL="1")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self._creates(calls), [])
+        self.assertEqual(self._closes(calls), [])
+        self.assertIn("Could not list open issues", result.stdout)
 
 
 if __name__ == "__main__":
