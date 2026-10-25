@@ -9,6 +9,8 @@ macOS say is the last-resort fallback.
 
 import base64
 import os
+import sys
+import time
 from pathlib import Path
 
 import requests
@@ -50,8 +52,19 @@ async def _edge_tts_generate(text: str, voice: str, output_path: Path, rate: str
     await communicate.save(str(output_path))
 
 
+# Edge TTS retry settings. Edge sometimes fails for a moment (e.g. "No audio was received"),
+# so it is tried again: wait 2 seconds before attempt 2 and 5 seconds before attempt 3.
+EDGE_MAX_ATTEMPTS = 3
+EDGE_RETRY_WAITS = (2, 5)
+EDGE_MIN_AUDIO_BYTES = 1000
+
+
 def _generate_edge_tts(script: str, out_dir: Path, lang: str, voice_override: str = "") -> Path:
-    """Generate voiceover via Edge TTS (free Microsoft voices)."""
+    """Generate voiceover via Edge TTS (free Microsoft voices).
+
+    Makes up to EDGE_MAX_ATTEMPTS attempts. An attempt fails if Edge raises an error
+    or leaves no usable audio file behind.
+    """
     import asyncio
 
     voice = voice_override or EDGE_VOICES.get(lang[:2], EDGE_VOICES["en"])
@@ -59,26 +72,44 @@ def _generate_edge_tts(script: str, out_dir: Path, lang: str, voice_override: st
 
     log(f"Generating {lang} voiceover via Edge TTS (voice: {voice})...")
 
-    try:
-        # Handle event loop — works whether called from sync or async context
+    last_error = ""
+    for attempt in range(1, EDGE_MAX_ATTEMPTS + 1):
+        if attempt > 1:
+            time.sleep(EDGE_RETRY_WAITS[attempt - 2])
+        out_path.unlink(missing_ok=True)  # remove any leftover file from the last attempt
         try:
-            loop = asyncio.get_running_loop()
-            # Already in an async context, create a new thread
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                future = pool.submit(
-                    asyncio.run,
-                    _edge_tts_generate(script, voice, out_path)
-                )
-                future.result(timeout=60)
-        except RuntimeError:
-            # No running loop, safe to use asyncio.run
-            asyncio.run(_edge_tts_generate(script, voice, out_path))
+            # Handle event loop — works whether called from sync or async context
+            try:
+                loop = asyncio.get_running_loop()
+                # Already in an async context, create a new thread
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    future = pool.submit(
+                        asyncio.run,
+                        _edge_tts_generate(script, voice, out_path)
+                    )
+                    future.result(timeout=60)
+            except RuntimeError:
+                # No running loop, safe to use asyncio.run
+                asyncio.run(_edge_tts_generate(script, voice, out_path))
 
-        log(f"Edge TTS voiceover saved: {out_path.name}")
-        return out_path
-    except Exception as e:
-        raise RuntimeError(f"Edge TTS failed: {e}")
+            if not out_path.exists():
+                raise RuntimeError("audio file missing")
+            size = out_path.stat().st_size
+            if size < EDGE_MIN_AUDIO_BYTES:
+                raise RuntimeError(f"audio file too small ({size} bytes)")
+        except Exception as e:
+            last_error = str(e) or type(e).__name__
+            log(f"Edge TTS attempt {attempt}/{EDGE_MAX_ATTEMPTS} failed: {last_error}")
+        else:
+            log(f"Edge TTS voiceover saved: {out_path.name}")
+            return out_path
+
+    excerpt = script[:60].replace("\r", " ").replace("\n", " ")
+    log(f'Edge TTS gave up on a {len(script)}-character text, starting: "{excerpt}"')
+    raise RuntimeError(
+        f"Edge TTS failed after {EDGE_MAX_ATTEMPTS} attempts (last error: {last_error})"
+    )
 
 
 # ─────────────────────────────────────────────────────
@@ -308,6 +339,18 @@ def _generate_say(script: str, out_dir: Path) -> Path:
     return mp3_path
 
 
+def _say_fallback(script: str, out_dir: Path, failure_text: str) -> Path:
+    """Last-resort voice: macOS 'say', but only on a Mac.
+
+    On other systems (e.g. the Linux cloud runner) 'say' does not exist,
+    so raise a clear error instead of trying it.
+    """
+    if sys.platform == "darwin":
+        log("Falling back to macOS say...")
+        return _generate_say(script, out_dir)
+    raise RuntimeError(f"No working voice: {failure_text}")
+
+
 # ─────────────────────────────────────────────────────
 # Public API
 # ─────────────────────────────────────────────────────
@@ -400,8 +443,7 @@ def generate_voiceover(
                 log("Falling back to 60db...")
                 provider = "60db"
             else:
-                log("Falling back to macOS say...")
-                return _generate_say(script, out_dir)
+                return _say_fallback(script, out_dir, str(e))
 
     if provider == "minimax":
         try:
@@ -419,8 +461,10 @@ def generate_voiceover(
                 log("Falling back to 60db...")
                 provider = "60db"
             else:
-                log("Falling back to macOS say...")
-                return _generate_say(script, out_dir)
+                return _say_fallback(
+                    script, out_dir,
+                    f"MiniMax TTS failed (last error: {e}); the macOS 'say' fallback only runs on a Mac",
+                )
 
     if provider == "elevenlabs":
         try:
@@ -435,8 +479,10 @@ def generate_voiceover(
                 log("Falling back to 60db...")
                 provider = "60db"
             else:
-                log("Falling back to macOS say...")
-                return _generate_say(script, out_dir)
+                return _say_fallback(
+                    script, out_dir,
+                    f"ElevenLabs failed (last error: {e}); the macOS 'say' fallback only runs on a Mac",
+                )
 
     if provider == "60db":
         try:
@@ -447,8 +493,10 @@ def generate_voiceover(
             )
         except Exception as e:
             log(f"60db failed: {e}")
-            log("Falling back to macOS say...")
-            return _generate_say(script, out_dir)
+            return _say_fallback(
+                script, out_dir,
+                f"60db failed (last error: {e}); the macOS 'say' fallback only runs on a Mac",
+            )
 
     if provider == "say":
         return _generate_say(script, out_dir)
