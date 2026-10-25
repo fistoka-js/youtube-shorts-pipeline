@@ -75,5 +75,12 @@
     "narrative_structure": "process-walkthrough: explain a mechanism or system step by step, in the order it actually operates",
     "outro_treatment": "plain subscribe CTA with no extra framing",
     "visual_treatment": "stock-footage-led: maximize real subject footage, keep abstract/diagram prompts to the bare minimum needed"
+  },
+  {
+    "niche": "science",
+    "intro_style": "direct question: open by asking the exact question the video answers",
+    "narrative_structure": "what-if: explore a hypothetical framing throughout (what if this trait didn't exist, etc.)",
+    "outro_treatment": "direct question to the audience inviting a comment",
+    "visual_treatment": "diagram-and-data: lean into the upper end of the allowed abstract/diagram prompt ratio - more anatomical diagrams, data visualizations, and explanatory graphics than usual"
   }
 ]
