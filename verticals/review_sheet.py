@@ -13,6 +13,9 @@ from pathlib import Path
 
 REVIEW_DIR = Path("queue") / "review"
 FLAG_LINE = "NEEDS FACT CHECK"
+# The verdicts that flag a claim. "simplified" is deliberately not here. Shared with fact_check.
+FLAGGING_VERDICTS = ("contradicted", "known_misconception", "unsupported")
+SIMPLIFICATIONS_HEADING = "## Simplifications (for your eyes)"
 VIDEO_PREFIX = "Video: "
 NO_SOURCES_TEXT = "The research step does not keep source URLs, so none can be listed."
 _MISSING_AUDIT = {"available": False, "ok": False, "claims": [], "error": "no fact check record was saved"}
@@ -95,12 +98,18 @@ def build_review_sheet(*, queue_name: str, topic: str, fact_check: dict | None,
         out += _claim_bullets(final["claims"])
     out.append("")
 
+    simplified = [c for c in final.get("claims", []) if c.get("verdict") == "simplified"]
+    if simplified:
+        out.append(SIMPLIFICATIONS_HEADING)
+        out += _claim_bullets(simplified)
+        out.append("")
+
     if redrafted:
         out.append("## First audit flagged claims (before the redraft)")
         if not first.get("available"):
             out.append("- No claims were checked, because the first audit was unavailable.")
         else:
-            flagged = [c for c in first.get("claims", []) if c.get("verdict") != "supported"]
+            flagged = [c for c in first.get("claims", []) if c.get("verdict") in FLAGGING_VERDICTS]
             out += _claim_bullets(flagged) or ["- None."]
         out.append("")
 

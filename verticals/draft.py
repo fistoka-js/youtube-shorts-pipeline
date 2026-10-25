@@ -89,6 +89,13 @@ def _tidy_shorts_draft(draft: dict, profile: dict) -> int:
     return removed
 
 
+def _log_dropped_claims(audit: dict) -> None:
+    """One log line when an audit dropped claims whose quote was not found in the script."""
+    dropped = audit.get("dropped_claims", 0)
+    if dropped:
+        log(f"Fact check dropped {dropped} claim(s) whose quote was not found in the script")
+
+
 def generate_draft(
     news: str,
     channel_context: str = "",
@@ -219,6 +226,7 @@ Output JSON exactly:
     markers_first = _tidy_shorts_draft(draft, profile)
 
     audit_first = audit_script(draft.get("script", ""), research, news, llm_call=ask)
+    _log_dropped_claims(audit_first)
     fact_check = {
         "first_audit": audit_first,
         "redrafted": False,
@@ -253,6 +261,7 @@ Output JSON exactly:
             if not redraft["script"].strip():
                 raise ValueError("the redraft script was empty once bracketed markers were removed")
             audit_final = audit_script(redraft["script"], research, news, llm_call=ask)
+            _log_dropped_claims(audit_final)
         except Exception as e:
             # The redraft is optional: keep the first script and mark it for a human check.
             fact_check["redraft_error"] = f"{type(e).__name__}: {str(e)[:200]}"

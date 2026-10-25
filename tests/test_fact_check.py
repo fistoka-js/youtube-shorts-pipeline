@@ -38,16 +38,37 @@ FIXED_VARIATION = {
     "outro_treatment": "TEST-OUTRO",
     "visual_treatment": "TEST-VISUAL",
 }
-DIRTY_SCRIPT = "[B-ROLL: a plane wing] Planes fly because of lift. [B-ROLL: runway] Lift is a pressure difference."
-CLEAN_SCRIPT = "Planes fly because of lift. Lift is a pressure difference."
+MYTH_QUOTE = "Air over the top must reach the back edge at the same time as air below"
+MYTH_SENTENCE = MYTH_QUOTE + "."
+# The mocked audit replies decide the verdicts. A script only has to contain the quotes that its
+# audit uses, so the scripts that get the myth audit carry the myth sentence.
+DIRTY_SCRIPT = ("[B-ROLL: a plane wing] Planes fly because of lift. [B-ROLL: runway] "
+                "Lift is a pressure difference. " + MYTH_SENTENCE)
+CLEAN_SCRIPT = "Planes fly because of lift. Lift is a pressure difference. " + MYTH_SENTENCE
 REDRAFT_SCRIPT = "Planes fly because of pressure differences. Lift is a pressure difference."
-DIRTY_REDRAFT = "Lift is a pressure difference. [B-ROLL: wing] Still flagged."
-CLEAN_REDRAFT = "Lift is a pressure difference. Still flagged."
-GOOD_CLAIM = {"claim": "Lift is a pressure difference.", "verdict": "supported", "note": "In the research."}
+DIRTY_REDRAFT = "Lift is a pressure difference. [B-ROLL: wing] " + MYTH_SENTENCE
+CLEAN_REDRAFT = "Lift is a pressure difference. " + MYTH_SENTENCE
+AUDIT_SCRIPT = CLEAN_SCRIPT  # the script the audit unit tests check quotes against
+GOOD_QUOTE = "Lift is a pressure difference"
+GOOD_CLAIM = {"claim": "Lift is a pressure difference.", "quote": GOOD_QUOTE,
+              "verdict": "supported", "note": "In the research."}
 MYTH_CLAIM = {
     "claim": "Air over the top must reach the back edge at the same time as air below.",
+    "quote": MYTH_QUOTE,
     "verdict": "known_misconception",
     "note": "A popular myth; the two air streams do not have to meet.",
+}
+SIMPLIFIED_CLAIM = {
+    "claim": "Planes fly because of lift.",
+    "quote": "Planes fly because of lift",
+    "verdict": "simplified",
+    "note": "A common simplification; true in essence.",
+}
+CONTRADICTED_CLAIM = {
+    "claim": "Planes fly because of lift.",
+    "quote": "Planes fly because of lift",
+    "verdict": "contradicted",
+    "note": "The research data says otherwise.",
 }
 FC_PROMPT_START = "You are a fact checker"
 SHORTS_RULE = "If the topic has a famous misconception, state that it is wrong instead of repeating it as fact"
@@ -147,14 +168,14 @@ def script_log(monkeypatch):
 # ---------------------------------------------------------------------------
 class TestAuditScript:
     def _audit(self, reply):
-        return FC.audit_script("A script.", RESEARCH, "Topic", llm_call=lambda prompt: reply)
+        return FC.audit_script(AUDIT_SCRIPT, RESEARCH, "Topic", llm_call=lambda prompt: reply)
 
     def test_code_fences_are_stripped(self):
         result = self._audit("```json\n" + audit_reply(GOOD_CLAIM) + "\n```")
         assert result == {"available": True, "ok": True,
                           "claims": [{"claim": GOOD_CLAIM["claim"], "verdict": "supported",
-                                      "note": "In the research."}],
-                          "error": None}
+                                      "note": "In the research.", "quote": GOOD_QUOTE}],
+                          "error": None, "dropped_claims": 0}
 
     def test_ok_is_computed_in_code_not_taken_from_the_model(self):
         result = self._audit('{"ok": true, "claims": [' + json.dumps(MYTH_CLAIM) + "]}")
@@ -162,7 +183,7 @@ class TestAuditScript:
         assert result["claims"][0]["verdict"] == "known_misconception"
 
     def test_unknown_verdict_is_treated_as_unsupported(self):
-        reply = '{"claims": [{"claim": "x", "verdict": "maybe", "note": "unsure"}]}'
+        reply = '{"claims": [{"claim": "x", "quote": "Lift is a pressure difference", "verdict": "maybe", "note": "unsure"}]}'
         result = self._audit(reply)
         assert result["available"] is True
         assert result["ok"] is False
@@ -220,7 +241,7 @@ class TestAuditScript:
     def test_odd_inputs_do_not_raise(self):
         empty = FC.audit_script(None, None, None, llm_call=lambda prompt: audit_reply(GOOD_CLAIM))
         assert empty["available"] is False and empty["ok"] is False
-        result = FC.audit_script("A script.", None, None, llm_call=lambda prompt: audit_reply(GOOD_CLAIM))
+        result = FC.audit_script(AUDIT_SCRIPT, None, None, llm_call=lambda prompt: audit_reply(GOOD_CLAIM))
         assert result["available"] is True and result["ok"] is True
 
     def test_default_call_goes_through_call_llm(self, monkeypatch):
@@ -231,7 +252,7 @@ class TestAuditScript:
             return audit_reply(GOOD_CLAIM)
 
         monkeypatch.setattr(FC, "call_llm", fake_call_llm)
-        result = FC.audit_script("A script.", RESEARCH, "Topic")
+        result = FC.audit_script(AUDIT_SCRIPT, RESEARCH, "Topic")
         assert result["ok"] is True
         assert len(seen) == 1 and seen[0].startswith(FC_PROMPT_START)
 
@@ -252,8 +273,9 @@ class TestAuditPrompt:
         begin_s, end_s, begin_r, end_r = FC.delimiter_lines(_tag(prompt))
         assert prompt.count(begin_r) == 1 and prompt.count(end_r) == 1
         assert prompt.count(begin_s) == 1 and prompt.count(end_s) == 1
-        for verdict in ("supported", "unsupported", "contradicted", "known_misconception"):
+        for verdict in ("supported", "simplified", "unsupported", "contradicted", "known_misconception"):
             assert verdict in prompt
+        assert '"quote"' in prompt  # the reply shape asks for the quote
 
     def test_injected_research_text_sits_only_inside_the_delimited_block(self):
         research = f"Lift is a pressure difference. {INJECTION}"
@@ -415,7 +437,8 @@ class TestShortsFactCheckFlow:
         assert first_line == "NEEDS FACT CHECK"
 
     def test_unknown_verdict_is_redrafted_as_unsupported(self, monkeypatch):
-        odd = '{"claims": [{"claim": "Planes glow.", "verdict": "maybe", "note": "unclear"}]}'
+        odd = ('{"claims": [{"claim": "Planes fly because of lift.", "quote": "Planes fly because of lift", '
+               '"verdict": "maybe", "note": "unclear"}]}')
         llm = ScriptedLLM([draft_reply(CLEAN_SCRIPT), draft_reply(REDRAFT_SCRIPT)],
                           [odd, audit_reply(GOOD_CLAIM)])
         monkeypatch.setattr(draft_mod, "_call_claude", llm)
@@ -717,9 +740,9 @@ def _layout_fact_check():
 
 class TestParserAndHelperRules:
     def test_parse_audit_reply_refuses_an_empty_claims_list_directly(self):
-        result = FC.parse_audit_reply('{"claims": []}')
+        result = FC.parse_audit_reply('{"claims": []}', AUDIT_SCRIPT)
         assert result == {"available": False, "ok": False, "claims": [],
-                          "error": "the audit listed no claims"}
+                          "error": "the audit listed no claims", "dropped_claims": 0}
 
     def test_one_line_helper_is_defined_once_and_shared(self):
         assert FC.one_line is RS.one_line
@@ -842,12 +865,13 @@ class TestVideoLineFixes:
         assert added_twice.count(b"Video: ") == 1
 
 
-GOOD_JSON = '{"claims": [{"claim": "Lift is a pressure difference.", "verdict": "supported", "note": "ok"}]}'
+GOOD_JSON = ('{"claims": [{"claim": "Lift is a pressure difference.", "quote": "Lift is a pressure difference", '
+             '"verdict": "supported", "note": "ok"}]}')
 
 
 class TestParseFindsTheRightObject:
     def _audit(self, reply):
-        return FC.parse_audit_reply(reply)
+        return FC.parse_audit_reply(reply, AUDIT_SCRIPT)
 
     def test_braces_in_prose_before_the_json(self):
         result = self._audit('Sure {not json} then ' + GOOD_JSON)
@@ -931,21 +955,22 @@ class TestSheetRobustness:
         assert path.read_bytes() == content
 
 
-GOOD_ITEM = {"claim": "Lift is a pressure difference.", "verdict": "supported", "note": "ok"}
+GOOD_ITEM = {"claim": "Lift is a pressure difference.", "quote": "Lift is a pressure difference",
+             "verdict": "supported", "note": "ok"}
 
 
 class TestFencedBlocksAreAllTried:
     def test_unrelated_fence_before_the_json_is_skipped(self):
-        result = FC.parse_audit_reply("```text example```\n" + GOOD_JSON)
+        result = FC.parse_audit_reply("```text example```\n" + GOOD_JSON, AUDIT_SCRIPT)
         assert result["available"] is True and result["ok"] is True
 
     def test_unrelated_fence_after_the_json_is_skipped(self):
-        result = FC.parse_audit_reply(GOOD_JSON + "\n```\n foo \n```")
+        result = FC.parse_audit_reply(GOOD_JSON + "\n```\n foo \n```", AUDIT_SCRIPT)
         assert result["available"] is True and result["ok"] is True
 
     def test_json_in_the_second_of_several_fences_is_found(self):
         reply = "```\n{not claims}\n```\nand\n```json\n" + GOOD_JSON + "\n```"
-        result = FC.parse_audit_reply(reply)
+        result = FC.parse_audit_reply(reply, AUDIT_SCRIPT)
         assert result["available"] is True and len(result["claims"]) == 1
 
 
@@ -957,7 +982,7 @@ class TestPathologicalReplies:
 
     def _timed(self, reply):
         start = time.perf_counter()
-        result = FC.parse_audit_reply(reply)
+        result = FC.parse_audit_reply(reply, AUDIT_SCRIPT)
         return result, time.perf_counter() - start
 
     def test_deeply_nested_junk_before_valid_claims_ends_cleanly(self):
@@ -996,11 +1021,12 @@ class TestPathologicalReplies:
 
 class TestClaimShapes:
     def _parse(self, claims_json):
-        return FC.parse_audit_reply('{"claims": ' + claims_json + "}")
+        return FC.parse_audit_reply('{"claims": ' + claims_json + "}", AUDIT_SCRIPT)
 
     def test_blank_supported_claim_is_dropped_so_it_cannot_pass(self):
         result = self._parse('[{"claim": "", "verdict": "supported"},'
-                             ' {"claim": "Real.", "verdict": "supported"}]')
+                             ' {"claim": "Real.", "quote": "Lift is a pressure difference",'
+                             ' "verdict": "supported"}]')
         assert [c["claim"] for c in result["claims"]] == ["Real."]
         assert result["ok"] is True
 
@@ -1010,12 +1036,14 @@ class TestClaimShapes:
         assert "no claims" in result["error"]
 
     def test_blank_contradicted_claim_is_kept_with_placeholder_text(self):
-        result = self._parse('[{"claim": "  ", "verdict": "contradicted", "note": "n"}]')
+        result = self._parse('[{"claim": "  ", "verdict": "contradicted", "note": "n",'
+                             ' "quote": "Lift is a pressure difference"}]')
         assert result["available"] is True and result["ok"] is False
-        assert result["claims"] == [{"claim": "(claim text missing)", "verdict": "contradicted", "note": "n"}]
+        assert result["claims"] == [{"claim": "(claim text missing)", "verdict": "contradicted", "note": "n",
+                                     "quote": GOOD_QUOTE}]
 
     def test_non_string_claim_with_unsupported_verdict_is_kept(self):
-        result = self._parse('[{"claim": 123, "verdict": "unsupported"}]')
+        result = self._parse('[{"claim": 123, "verdict": "unsupported", "quote": "Lift is a pressure difference"}]')
         assert result["ok"] is False
         assert result["claims"][0]["claim"] == "(claim text missing)"
 
@@ -1031,7 +1059,8 @@ class TestClaimShapes:
         assert result["available"] is False and "wrong shape" in result["error"]
 
     def test_probe_string_entry_next_to_a_supported_claim_is_not_ok(self):
-        result = FC.parse_audit_reply('{"claims": ["Earth is flat", {"claim":"a","verdict":"supported"}]}')
+        result = FC.parse_audit_reply('{"claims": ["Earth is flat", {"claim":"a","verdict":"supported"}]}',
+                                      AUDIT_SCRIPT)
         assert result["available"] is False
         assert result["ok"] is False
         assert result["claims"] == []
@@ -1064,3 +1093,93 @@ class TestNullScript:
         assert raw_block.startswith("```text\n\n```\n")
         assert final_block.strip() == "```text\n\n```"
         assert "None" not in raw_block and "None" not in final_block
+
+
+# ---------------------------------------------------------------------------
+# Quotes must be in the script; simplified claims do not flag; contradicted claims do
+# ---------------------------------------------------------------------------
+class TestQuoteCheck:
+    def test_a_claim_whose_quote_is_not_in_the_script_is_dropped(self, monkeypatch, messages):
+        bad = {"claim": "Planes glow.", "quote": "Planes glow at night", "verdict": "known_misconception",
+               "note": "not in the script"}
+        llm = ScriptedLLM([draft_reply(CLEAN_SCRIPT)], [audit_reply(bad, GOOD_CLAIM)])
+        monkeypatch.setattr(draft_mod, "_call_claude", llm)
+        draft = generate_draft("Why do airplanes fly?")
+
+        assert llm.kinds == ["draft", "audit"]  # the dropped claim does not cause a redraft
+        fc = draft["fact_check"]
+        assert [c["claim"] for c in fc["first_audit"]["claims"]] == [GOOD_CLAIM["claim"]]
+        assert fc["first_audit"]["dropped_claims"] == 1
+        assert fc["needs_fact_check"] is False
+        assert "Fact check dropped 1 claim(s) whose quote was not found in the script" in messages
+
+    def test_d_a_missing_quote_is_not_verifiable_so_it_is_dropped(self):
+        no_quote = {"claim": "Lift is a pressure difference.", "verdict": "contradicted", "note": "n"}
+        result = FC.parse_audit_reply(audit_reply(no_quote, GOOD_CLAIM), AUDIT_SCRIPT)
+        assert result["available"] is True and result["ok"] is True
+        assert [c["claim"] for c in result["claims"]] == [GOOD_CLAIM["claim"]]
+        assert result["dropped_claims"] == 1
+        # If every claim is dropped the audit is unavailable, never a pass.
+        only = FC.parse_audit_reply(audit_reply(no_quote), AUDIT_SCRIPT)
+        assert only["available"] is False and only["ok"] is False
+        assert "no claims" in only["error"]
+
+    def test_quote_matching_ignores_case_whitespace_dashes_and_curly_quotes(self):
+        script = "The wing’s lift — a pressure\n  difference “now”, really."
+        matching = {"claim": "c", "quote": 'the wing\'s LIFT - a pressure   difference "now"',
+                    "verdict": "supported", "note": ""}
+        other_words = {"claim": "c", "quote": 'a pressure difference "later"', "verdict": "supported", "note": ""}
+        result = FC.parse_audit_reply(audit_reply(matching, other_words), script)
+        assert result["dropped_claims"] == 1
+        assert [c["quote"] for c in result["claims"]] == ["the wing's LIFT - a pressure difference \"now\""]
+
+
+class TestSimplifiedAndContradicted:
+    def test_b_a_simplified_claim_does_not_flag_or_redraft_and_is_listed_under_its_own_heading(
+            self, monkeypatch, messages):
+        llm = ScriptedLLM([draft_reply(CLEAN_SCRIPT)], [audit_reply(SIMPLIFIED_CLAIM, GOOD_CLAIM)])
+        monkeypatch.setattr(draft_mod, "_call_claude", llm)
+        draft = generate_draft("Why do airplanes fly?")
+
+        assert llm.kinds == ["draft", "audit"]  # no redraft
+        fc = draft["fact_check"]
+        assert fc["first_audit"]["ok"] is True
+        assert FC.flagged_claims(fc["first_audit"]) == []
+        assert fc["needs_fact_check"] is False
+        assert "Fact check passed" in messages
+
+        sheet = RS.build_review_sheet(queue_name="q", topic="t", fact_check=fc,
+                                      final_script=draft["script"], research=RESEARCH)
+        assert sheet.splitlines()[0] == "# Review: q"  # no NEEDS FACT CHECK banner
+        assert "NEEDS FACT CHECK" not in sheet
+        assert "- Result: passed" in sheet.splitlines()
+        assert "- simplified: Planes fly because of lift. (Note: A common simplification; true in essence.)" \
+            in _section(sheet, "Claims checked (final audit)")
+        simplified_block = _section(sheet, "Simplifications (for your eyes)")
+        assert simplified_block.strip() == \
+            "- simplified: Planes fly because of lift. (Note: A common simplification; true in essence.)"
+        assert (sheet.index("## Claims checked (final audit)") < sheet.index("## Simplifications (for your eyes)")
+                < sheet.index("## Final script"))
+
+    def test_no_simplifications_heading_when_there_are_none(self):
+        fc = {"first_audit": {"available": True, "ok": True, "claims": [GOOD_CLAIM], "error": None},
+              "final_audit": {"available": True, "ok": True, "claims": [GOOD_CLAIM], "error": None},
+              "needs_fact_check": False}
+        sheet = RS.build_review_sheet(queue_name="q", topic="t", fact_check=fc,
+                                      final_script=CLEAN_SCRIPT, research=RESEARCH)
+        assert "## Simplifications" not in sheet
+
+    def test_c_a_contradicted_claim_still_flags_and_triggers_one_redraft(self, monkeypatch):
+        llm = ScriptedLLM([draft_reply(CLEAN_SCRIPT), draft_reply(REDRAFT_SCRIPT)],
+                          [audit_reply(CONTRADICTED_CLAIM), audit_reply(GOOD_CLAIM)])
+        monkeypatch.setattr(draft_mod, "_call_claude", llm)
+        draft = generate_draft("Why do airplanes fly?")
+
+        assert llm.kinds == ["draft", "audit", "draft", "audit"]
+        assert "CORRECTIONS" in llm.prompt(2)
+        assert CONTRADICTED_CLAIM["claim"] in llm.prompt(2)
+        fc = draft["fact_check"]
+        assert fc["first_audit"]["ok"] is False
+        assert fc["redrafted"] is True
+        assert fc["needs_fact_check"] is False
+        assert draft["script"] == REDRAFT_SCRIPT
