@@ -85,3 +85,4 @@ Without magnetism, your phone dies, hospitals lose MRI machines, and compasses s
 
 Bracketed markers removed by the cleaner: 0 in the first script, 0 in the redraft.
 
+Video: https://youtu.be/dut7maOWmn4
