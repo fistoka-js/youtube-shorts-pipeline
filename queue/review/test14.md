@@ -10,27 +10,32 @@ Topic: how do magnets work
 - Error: none
 
 ## Claims checked (final audit)
-- supported: Every electron spins, and that spin creates a tiny magnetic field. (Note: Electron spin generating a magnetic dipole moment is well-established physics and supported by the research data.)
-- supported: In most materials, electron magnetic fields point randomly and cancel out. (Note: The research data confirms that in most things these fields cancel out.)
-- supported: In iron, electron magnetic fields line up, creating a magnet. (Note: Research data specifically states that in certain materials like iron the tiny magnetic fields align in the same direction.)
-- supported: You cannot have a north pole without a south pole (magnetic monopoles don't exist). (Note: The research data states 'You can't have one without the other,' consistent with well-established physics.)
-- supported: Lines of force exit the north pole, arc through space, and enter at the south pole in a continuous loop. (Note: The research data explicitly describes field lines exiting the north pole and entering the south pole in a continuous loop.)
-- supported: When opposite poles meet, their field loops connect and attract. (Note: Research data and widely accepted knowledge confirm opposite poles attract each other.)
-- supported: Like poles clash and push apart (repel). (Note: Research data confirms like poles always repel each other.)
-- supported: Electromagnets are built by running electricity through a coiled wire. (Note: Research data states electromagnets are created by running an electrical current through a coil with a metal core.)
-- supported: Electromagnets power MRI machines. (Note: Research data explicitly names MRI machines as an example of electromagnets.)
-- supported: Electromagnets power motors. (Note: Research data lists motors among things that contain magnets/electromagnets.)
-- unsupported: Electromagnets power speakers. (Note: The research data lists telephones, door bells, motors, and compasses but does not specifically mention speakers.)
-- contradicted: Electromagnets power compasses. (Note: Compasses use permanent magnets to align with Earth's magnetic field, not electromagnets; research data listing compasses alongside electromagnets is misleading but the claim that electromagnets power compasses is incorrect.)
+- supported: Without magnetism, phones would stop working (Note: Phones rely on magnetic components; widely accepted that magnetism is essential to their operation.)
+- supported: Without magnetism, hospitals would lose MRI machines (Note: MRI machines are electromagnets, confirmed by research data.)
+- supported: Without magnetism, compasses would stop working (Note: Research data confirms compasses rely on magnetism.)
+- supported: Every electron carries a tiny magnetic field (Note: Widely accepted in physics that electrons produce magnetic fields due to their intrinsic properties.)
+- supported: The electron's magnetic field is not because it is spinning like a top (Note: Quantum spin is not literal physical spinning; this is a well-established clarification in modern physics.)
+- supported: The electron's magnetic field arises from a deep quantum property called quantum spin that has no real-world equivalent (Note: Quantum spin is a fundamental quantum property with no classical analogue, consistent with widely accepted physics.)
+- supported: In most materials, the tiny magnetic fields of electrons point in random directions and cancel out completely (Note: Research data confirms that in most materials the magnetic fields cancel out.)
+- supported: In iron, microscopic regions called magnetic domains line up in the same direction (Note: Research data explicitly states that in magnetised materials, magnetic domains have aligned magnetic moments.)
+- supported: The alignment of magnetic domains creates a larger combined field strong enough to attract or repel other magnetic materials without touching them (Note: Research data confirms magnets attract and repel due to alignment of magnetic domains without physical contact.)
+- supported: The magnetic field loops from the north pole, curves through space, and re-enters at the south pole (Note: Research data states field lines exit the north pole and enter the south pole in a continuous loop.)
+- supported: Opposite magnetic poles attract (Note: Confirmed by research data and widely accepted knowledge.)
+- supported: Like magnetic poles repel (Note: Confirmed by research data and widely accepted knowledge.)
+- supported: The same basic principle powers electric motors (Note: Widely accepted that electric motors rely on magnetism.)
+- supported: The same basic principle powers speakers (Note: Widely accepted that speakers use magnetic principles to operate.)
+- supported: The same basic principle powers MRI scanners (Note: Research data confirms MRI machines are electromagnets.)
+- supported: The same basic principle powers compasses (Note: Research data confirms compasses rely on magnetism.)
+- known_misconception: The research data's description that electrons 'spin' to create magnetic fields is taken at face value (Note: The research data says 'electrons spin and create small magnetic fields,' but quantum spin is not literal spinning; the script correctly flags this, but the raw research data repeats the misconception.)
 
 ## First audit flagged claims (before the redraft)
-- contradicted: Magnetic field lines flow from north to south, completing a loop. (Note: By convention, magnetic field lines exit from the north pole and enter at the south pole (north to south outside the magnet), so describing them as flowing from north to south is partially misleading, but more precisely the research data states lines exit from the north pole and enter through the south pole, forming a continuous loop — the script's description of direction is reversed from standard convention.)
-- unsupported: Earth itself works by the same electron-spin-based magnetism as ordinary magnets. (Note: Earth's magnetic field is generated primarily by electric currents in its liquid outer core (the geodynamo), not by electron spin alignment as in permanent magnets, so attributing it to the same 'electron choreography' oversimplifies and conflates distinct mechanisms.)
-- unsupported: Magnets keep satellites in communication. (Note: Neither the research data nor widely accepted knowledge attributes satellite communications specifically to magnetism in the way described; this claim is not confirmed.)
+- known_misconception: Electrons spin, and that spinning creates a tiny magnetic field (Note: The quantum mechanical 'spin' of an electron is not actual physical spinning; describing it as literal spinning is a well-known oversimplification/misconception, though it appears in popular sources.)
+- known_misconception: Opposite poles attract because their fields flow together (Note: While opposite poles do attract, the explanation that fields 'flow together' causing attraction is an oversimplified popular explanation rather than the correct physical account.)
+- known_misconception: Like poles repel because their fields push against each other (Note: Like poles do repel, but explaining it as fields physically 'pushing against each other' is an oversimplified popular explanation, not the correct physical account.)
 
 ## Final script
 ```text
-Most people think magnets are simple. Just two poles that stick together. That's wrong — what's actually happening is one of the strangest things in physics. So what makes a magnet work? It starts with electrons. Every electron spins, and that spin creates a tiny magnetic field. In most materials, those fields point randomly and cancel out. But in iron? They line up. Millions of tiny fields all pointing the same direction — and suddenly you have a magnet. Now, why do opposites attract? Every magnet has a north and south pole — you can't have one without the other. Lines of force exit the north pole, arc through space, and enter at the south pole in a continuous loop. When opposite poles meet, those loops connect. Like poles? They clash and push apart. So why does any of this matter? Electromagnets — built by running electricity through a coiled wire — power MRI machines, motors, speakers, and compasses. The invisible force shaping electrons shapes the entire modern world. Subscribe for discoveries that blow your mind.
+Without magnetism, your phone dies, hospitals lose MRI machines, and compasses stop working. So how does this invisible force actually work? Step one: inside magnetic materials like iron, every atom has electrons. Each electron carries a tiny magnetic field — not because it's spinning like a top, but because of a deep property of nature called quantum spin that has no real-world equivalent. Step two: in most materials, these tiny fields point in random directions and cancel out completely. But in iron, something remarkable happens. Microscopic regions called magnetic domains line up in the same direction. Step three: that alignment creates a larger combined field, one strong enough to reach out and attract or repel other magnetic materials — without touching them. The field loops invisibly from the north pole, curves through space, and re-enters at the south pole. Opposite poles attract. Like poles repel. And this same basic principle powers electric motors, speakers, MRI scanners, and compasses worldwide. Subscribe for discoveries that blow your mind.
 ```
 
 ## Research sources
@@ -44,25 +49,38 @@ A magnet is a piece of metal or rock that is able to push (repel) or pull (attra
 At its core, a magnet produces a magnetic field—an invisible region of influence extending around it. This field contains lines of force that always travel in a specific pattern. These lines exit from the magnet’s north pole and enter through its south pole, creating a continuous loop. When you place iron filings around a magnet, they reveal this otherwise invisible pattern dramatically. [...] The most widespread technique for creating magnets involves placing metal in a strong magnetic field.
 Electromagnets are the last type. These magnets are created by running an electrical current through a coil with a metal core. The energized core creates a magnetic field. It stops working as soon as the electric current turns off. An MRI machine at a hospital is an example of an electromagnet. Other things with magnets in them include telephones, door bells, motors, and compasses. [...] There are a few types of magnets: temporary, permanent, and electromagnet.
 When most people think of magnetism, they think about the magnetic force experienced between two magnets. The magnetic force is caused by the magnet’s magnetic field and points in the direction of the field lines.
-A magnet both produces its own magnetic field and responds to magnetic fields. The strength of the magnetic field it produces is at any given point proportional to the magnitude of its magnetic moment. In addition, when the magnet is put into an external magnetic field, produced by a different source, it is subject to a torque tending to orient the magnetic moment parallel to the field. The amount of this torque is proportional both to the magnetic moment and the external field.
+[1:02] So first the basics. Magnets have two  poles, a north and a south.  You can’t   have one without the other. Like poles repel  and opposite poles attract. And two magnets  
+[1:12] pointing in the opposite direction cancel  each other out, leaving no magnet at all.  Magnets are made of atoms and therefore,  
+[1:21] the origins of magnetism must come from the atoms  or the constituent of atoms and how they move. The [...] [8:29] things to happen.
 If two magnets are pushed together, they will either attract each other or repel each other depending on which poles are closest. Like poles will always repel each other. That is, two north poles will push each other away. Two south poles will also repel each other.
 
 With magnets opposites will always attract. That is, a north pole will attract a south pole and vice versa. When we say attract, what we actually mean is that they will jump towards and stick to each other.
 Magnets work because of tiny particles called electrons. These electrons spin and create small magnetic fields. In most things, these fields cancel out. However, in certain materials, like iron, the tiny magnetic fields align in the same direction. [...] Magnets attract and repel due to the alignment of magnetic domains within their structure. In a magnetised material, microscopic regions called magnetic domains have aligned magnetic moments.
 Electromagnets are the last type. These magnets are created by running an electrical current through a coil with a metal core. The energized core creates a magnetic field. It stops working as soon as the electric current turns off. An MRI machine at a hospital is an example of an electromagnet. Other things with magnets in them include telephones, door bells, motors, and compasses. [...] Every magnet has a north pole and a south pole.
-[1:02] So first the basics. Magnets have two  poles, a north and a south.  You can’t   have one without the other. Like poles repel  and opposite poles attract. And two magnets  
-[1:12] pointing in the opposite direction cancel  each other out, leaving no magnet at all.  Magnets are made of atoms and therefore,  
-[1:21] the origins of magnetism must come from the atoms  or the constituent of atoms and how they move. The [...] [8:29] things to happen.
+Magnets work through an invisible force called magnetism, which can pull (attract) or push (repel) other magnetic materials without touching them. Not all materials respond to magnets, though. Things like plastic, wood, and glass aren’t affected by magnetism at all.
+
+This is because magnets can only attract objects made out of certain types of metals:
+
+### Magnetic Metals
+
+Metals that are magnetic include:
+
+ Iron
+ Steel
+ Nickel
+ Cobalt
+
+### Non-Magnetic Metals [...] In addition to generating...
 ```
 
 ## Raw script as the model first returned it (before cleaning)
 ```text
-Most people think magnets are just simple toys. They're wrong. So what actually makes a magnet work? It starts with electrons. Every electron spins, and that spin creates a tiny magnetic field. But here's the thing — in most materials, those fields point in random directions and cancel each other out. So why do some materials become magnetic? In iron, something remarkable happens. Groups of atoms called magnetic domains lock together, all pointing the same direction. Suddenly, instead of chaos, you get a coordinated force powerful enough to lift objects, spin motors, and see inside the human body. But wait — why do opposites attract? Because magnetic field lines flow from north to south, completing a loop. Opposite poles connect that loop. Like poles fight it. Now here's the mind-bending part: every magnet on Earth, including our planet itself, works by this same invisible electron choreography. The same force on your fridge is guiding compasses, running MRI machines, and keeping satellites in communication. Magnetism isn't a curiosity. It's the invisible architecture of our world. Follow for more science.
+Your phone, your car, your hospital's MRI machine — none of them work without understanding this one invisible force. So how do magnets actually work? It starts inside every atom. Electrons spin, and that spinning creates a tiny magnetic field. In most materials, those fields point in random directions and cancel each other out. But in metals like iron, something remarkable happens. Tiny regions called magnetic domains line up, all pointing the same way. When enough domains align, the whole material becomes a magnet. Now it produces a magnetic field — invisible lines of force flowing out of its north pole, looping around, and re-entering at its south pole. When two magnets meet, opposite poles attract because their fields flow together. Like poles repel because their fields push against each other. You can also trigger this with electricity. Run current through a coiled wire around a metal core — the core magnetizes instantly. Cut the power, the field vanishes. That's how MRI machines create fields powerful enough to image your entire body. Magnetism isn't just a party trick. It's the engine of the modern world. Subscribe for discoveries that blow your mind.
 ```
 
 ## Raw redraft script as the model returned it (before cleaning)
 ```text
-Most people think magnets are simple. Just two poles that stick together. That's wrong — what's actually happening is one of the strangest things in physics. So what makes a magnet work? It starts with electrons. Every electron spins, and that spin creates a tiny magnetic field. In most materials, those fields point randomly and cancel out. But in iron? They line up. Millions of tiny fields all pointing the same direction — and suddenly you have a magnet. Now, why do opposites attract? Every magnet has a north and south pole — you can't have one without the other. Lines of force exit the north pole, arc through space, and enter at the south pole in a continuous loop. When opposite poles meet, those loops connect. Like poles? They clash and push apart. So why does any of this matter? Electromagnets — built by running electricity through a coiled wire — power MRI machines, motors, speakers, and compasses. The invisible force shaping electrons shapes the entire modern world. Subscribe for discoveries that blow your mind.
+Without magnetism, your phone dies, hospitals lose MRI machines, and compasses stop working. So how does this invisible force actually work? Step one: inside magnetic materials like iron, every atom has electrons. Each electron carries a tiny magnetic field — not because it's spinning like a top, but because of a deep property of nature called quantum spin that has no real-world equivalent. Step two: in most materials, these tiny fields point in random directions and cancel out completely. But in iron, something remarkable happens. Microscopic regions called magnetic domains line up in the same direction. Step three: that alignment creates a larger combined field, one strong enough to reach out and attract or repel other magnetic materials — without touching them. The field loops invisibly from the north pole, curves through space, and re-enters at the south pole. Opposite poles attract. Like poles repel. And this same basic principle powers electric motors, speakers, MRI scanners, and compasses worldwide. Subscribe for discoveries that blow your mind.
 ```
 
 Bracketed markers removed by the cleaner: 0 in the first script, 0 in the redraft.
