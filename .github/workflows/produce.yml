@@ -1,9 +1,10 @@
 name: Produce video from queue
 
 on:
-  workflow_dispatch: {}   # manual trigger for now - schedule can be added later
-  # schedule:
-  #   - cron: "0 14 * * *"  # example: daily at 14:00 UTC, uncomment when ready
+  workflow_dispatch: {}   # manual trigger: Actions tab, then Run workflow
+  # Mon, Wed, Fri at 14:17 UTC; one topic per run
+  schedule:
+    - cron: "17 14 * * 1,3,5"
 
 # The run commits and pushes queue changes back to the branch (contents: write), and the last step
 # opens or closes the "Queue low: add topics" issue (issues: write).

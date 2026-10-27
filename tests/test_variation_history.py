@@ -481,7 +481,34 @@ class TestWorkflowFile(unittest.TestCase):
     def test_on_block_still_present(self):
         # PyYAML reads a bare `on:` key as the boolean True, not the string "on".
         self.assertIn(True, self.data)
-        self.assertEqual(self.data[True], {"workflow_dispatch": {}})
+        # Exactly two triggers: the manual button and the schedule. Nothing else.
+        self.assertEqual(set(self.data[True]), {"workflow_dispatch", "schedule"})
+        self.assertEqual(self.data[True]["workflow_dispatch"], {})
+
+    def test_schedule_is_exactly_one_mon_wed_fri_cron(self):
+        # Mon, Wed, Fri at 14:17 UTC. Exactly one entry, with exactly this cron text.
+        self.assertEqual(self.data[True]["schedule"], [{"cron": "17 14 * * 1,3,5"}])
+
+    def test_no_if_depends_on_event_name_or_inputs(self):
+        # A schedule run and a manual run must take the same path, so no `if:` may
+        # look at github.event_name or inputs. Checks every `if:` at job and step level.
+        found = []
+
+        def walk(node):
+            if isinstance(node, dict):
+                for key, value in node.items():
+                    if key == "if":
+                        found.append(str(value))
+                    walk(value)
+            elif isinstance(node, list):
+                for item in node:
+                    walk(item)
+
+        walk(self.data["jobs"])
+        self.assertTrue(found, "expected the existing if: always() conditions to be found")
+        for condition in found:
+            self.assertNotIn("github.event_name", condition)
+            self.assertNotIn("inputs", condition)
 
     def test_concurrency_group_and_cancel_flag(self):
         concurrency = self.data["concurrency"]

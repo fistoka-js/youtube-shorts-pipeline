@@ -421,6 +421,18 @@ Note: these GitHub web-editor steps have not been tested yet.
 
 **The "Queue low: add topics" issue.** After each cloud run, the workflow counts the topic files in `queue/pending/`. If fewer than 3 are waiting, it opens an issue titled "Queue low: add topics". The issue is assigned to the repository owner, so GitHub sends a notification. On a later run, when 3 or more topics are pending, the workflow closes the issue by itself.
 
+## The schedule
+
+The "Produce video from queue" workflow runs by itself on **Monday, Wednesday and Friday at 14:17 UTC**. That is **10:17 in Toronto** until November 1, and **9:17** after that.
+
+- Each scheduled run makes one video from the next topic in the queue.
+- Scheduled runs can start several minutes late.
+- If the queue is empty, a scheduled run does nothing, finishes green, and opens the "Queue low: add topics" issue when fewer than 3 topics are waiting.
+
+**To pause it:** on github.com, open **Actions**, click **Produce video from queue**, click the three-dot menu, and choose **Disable workflow**. To turn it back on, use the same menu and choose **Enable workflow**. You can also comment out the `schedule:` and `- cron:` lines in `.github/workflows/produce.yml` (put `#` in front of each) and commit.
+
+GitHub turns off scheduled workflows after 60 days with no repository activity. Check the Actions tab about once a month to make sure the schedule is still on.
+
 ## Naming queue files
 
 Topics run in file-name order, and numbers are compared as numbers, so `test2` runs before `test9`, and `test9` runs before `test10`. The date a file was saved does not matter.
