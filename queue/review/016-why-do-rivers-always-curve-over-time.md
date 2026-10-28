@@ -71,3 +71,4 @@ Picture a river carving through a flat plain — perfectly straight at first, ca
 
 Bracketed markers removed by the cleaner: 0 in the first script, 0 in the redraft.
 
+Video: https://youtu.be/jy5UPxqA6p8
