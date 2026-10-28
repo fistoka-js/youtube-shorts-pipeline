@@ -66,3 +66,4 @@ Everyone says lightning never strikes the same place twice. That's completely wr
 
 Bracketed markers removed by the cleaner: 0 in the first script, 0 in the redraft.
 
+Video: https://youtu.be/E7el7cKzHwU
