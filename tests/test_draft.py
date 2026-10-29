@@ -87,3 +87,53 @@ class TestGenerateDraft:
 
         draft = generate_draft("Test")
         assert len(draft["broll_prompts"]) == MAX_BROLL_PROMPTS  # truncated to the maximum
+
+
+class TestMusicMood:
+    BASE = {
+        "script": "A short test script.",
+        "broll_prompts": ["p1", "p2", "p3"],
+        "youtube_title": "T", "youtube_description": "D",
+        "youtube_tags": "t", "instagram_caption": "C",
+        "thumbnail_prompt": "P",
+    }
+
+    @patch("verticals.draft.research_topic")
+    @patch("verticals.draft._call_claude")
+    def test_valid_mood_is_saved_normalised(self, mock_claude, mock_research):
+        mock_research.return_value = "research"
+        mock_claude.return_value = json.dumps({**self.BASE, "music_mood": "  Hopeful "})
+
+        draft = generate_draft("Test")
+        assert draft["music_mood"] == "hopeful"
+
+    @patch("verticals.draft.research_topic")
+    @patch("verticals.draft._call_claude")
+    def test_draft_without_music_mood_is_accepted(self, mock_claude, mock_research):
+        mock_research.return_value = "research"
+        mock_claude.return_value = json.dumps(self.BASE)
+
+        draft = generate_draft("Test")
+        assert draft["script"] == "A short test script."
+        assert draft["music_mood"] is None
+
+    @patch("verticals.draft.research_topic")
+    @patch("verticals.draft._call_claude")
+    def test_invalid_mood_is_accepted_as_none(self, mock_claude, mock_research):
+        mock_research.return_value = "research"
+        mock_claude.return_value = json.dumps({**self.BASE, "music_mood": "jazzy"})
+
+        draft = generate_draft("Test")
+        assert draft["script"] == "A short test script."
+        assert draft["music_mood"] is None
+
+    @patch("verticals.draft.research_topic")
+    @patch("verticals.draft._call_claude")
+    def test_prompt_asks_for_music_mood(self, mock_claude, mock_research):
+        mock_research.return_value = "research"
+        mock_claude.return_value = json.dumps({**self.BASE, "music_mood": "cosmic"})
+
+        generate_draft("Test")
+        prompt = mock_claude.call_args_list[0][0][0]
+        assert '"music_mood": "cosmic, mysterious, hopeful or quirky"' in prompt
+        assert "MUSIC MOOD" in prompt

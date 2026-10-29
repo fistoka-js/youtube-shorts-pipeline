@@ -15,6 +15,7 @@ from .niche import load_niche, get_script_context, get_visual_context, get_visua
 from .research import research_topic
 from .variation import choose_variation, record_variation, format_variation_guidance
 from .fact_check import audit_script, build_corrections_block, flagged_claims
+from .music import clean_video_mood
 
 # How many generic b-roll prompts to use when Claude returns a non-list value.
 FALLBACK_BROLL_PROMPT_COUNT = 12
@@ -86,6 +87,8 @@ def _tidy_shorts_draft(draft: dict, profile: dict) -> int:
     suffix = get_visual_prompt_suffix(profile)
     if suffix and "broll_prompts" in draft:
         draft["broll_prompts"] = [f"{p}. {suffix}" for p in draft["broll_prompts"]]
+    # music_mood is optional: anything other than the four moods is saved as None
+    draft["music_mood"] = clean_video_mood(draft.get("music_mood"))
     return removed
 
 
@@ -201,6 +204,7 @@ RULES:
 - NEVER generate disturbing, graphic, violent, or unsettling imagery \u2014 if a script beat describes something negative (injury, distress, danger), depict it tastefully and indirectly (e.g. a vet's office, not the injury itself) or substitute a safe adjacent visual
 - Keep every prompt concrete and photographic: a specific subject, setting, and mood \u2014 not abstract concepts
 - The "script" field contains ONLY the words to be spoken aloud: no square-bracket notes, no [B-ROLL: ...] markers, no stage directions or visual cues. All visuals belong in broll_prompts
+- MUSIC MOOD: set "music_mood" to the one word that fits the video's overall feel. Use cosmic for calm wonder and big-picture space or nature facts, mysterious for dark, strange or unsettling topics, hopeful for uplifting or inspiring topics, quirky for funny, odd or gross topics. Use exactly one of these four words, lowercase
 Output JSON exactly:
 {{
   "script": "...",
@@ -211,7 +215,8 @@ Output JSON exactly:
   "youtube_tags": "tag1,tag2,tag3",
   "instagram_caption": "...",
   "tiktok_caption": "...",
-  "thumbnail_prompt": "..."
+  "thumbnail_prompt": "...",
+  "music_mood": "cosmic, mysterious, hopeful or quirky"
 }}"""
 
     def ask(text: str) -> str:

@@ -1,0 +1,40 @@
+# Mood tags for each track in this music/ folder.
+#
+# The tags are guesses made from the track titles and YouTube's mood labels,
+# not from listening to the tracks. Edit them freely if a track does not fit.
+#
+# verticals/music.py reads this file to pick a track whose tags overlap the
+# niche's music.tags (for example, the science niche uses "cosmic", "ambient",
+# "wonder", "cinematic" and "space"). Every .mp3 in this folder should have an
+# entry here, and every entry should match a file in this folder.
+
+pulsar.mp3: [cosmic, ambient, calm, space, wonder]
+event-horizon.mp3: [cosmic, ambient, calm, space, wonder]
+singularity.mp3: [cosmic, ambient, calm, space, wonder]
+laniakea.mp3: [cosmic, ambient, calm, space, wonder]
+nebula.mp3: [cosmic, ambient, calm, space, wonder]
+
+rapid-unscheduled-disassembly.mp3: [mysterious, dramatic, dark, space]
+false-vacuum-decay.mp3: [mysterious, dramatic, dark, space]
+red-shift.mp3: [mysterious, dramatic, dark, space]
+
+spaghettification.mp3: [hopeful, wonder, bright, space]
+frame-dragging.mp3: [hopeful, wonder, bright, space]
+
+turn-in-the-sun.mp3: [hopeful, wonder, inspirational, cinematic]
+way-back-home.mp3: [hopeful, wonder, inspirational, cinematic]
+
+caribbean-hide-and-seek.mp3: [quirky, playful, funky, light]
+fun-house-trap.mp3: [quirky, playful, funky, light]
+critter-cruise.mp3: [quirky, playful, funky, light]
+
+alexgrohl-sad-soul-hip-hop-185750.mp3: [sad, soul, hip-hop]
+jonasblakewood-inspiring-music-562845.mp3: [inspiring]
+jonasblakewood-pop-524132.mp3: [pop]
+leberch-children-quirky-254763.mp3: [children]
+leberch-cosy-quirky-248029.mp3: [cosy]
+leberch-hip-hop-516914.mp3: [hip-hop]
+leberch-lofi-hip-hop-519408.mp3: [lofi, hip-hop]
+leberch-mystery-quirky-355604.mp3: [mystery]
+leberch-quirky-501484.mp3: []
+paulyudin-technology-tech-technology-484304.mp3: [technology, tech]

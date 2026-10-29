@@ -3,10 +3,32 @@
 import random
 from pathlib import Path
 
+import yaml
+
 from .log import log
 
 # Music directory ships with the package
 MUSIC_DIR = Path(__file__).resolve().parent.parent / "music"
+
+# Each track's mood tags live in music/tracks.yaml, keyed by file name
+TRACK_TAGS_FILE_NAME = "tracks.yaml"
+
+# Tag used for the default pick when no track matches the niche's mood
+FALLBACK_TAG = "ambient"
+
+# The moods a video can ask for (the Shorts draft's "music_mood" field)
+VIDEO_MOODS = ("cosmic", "mysterious", "hopeful", "quirky")
+
+# Points a track gets for having the video's mood as one of its tags
+VIDEO_MOOD_BONUS = 10
+
+
+def clean_video_mood(value) -> str | None:
+    """Return the mood in lowercase if it is one of VIDEO_MOODS, else None."""
+    if not isinstance(value, str):
+        return None
+    mood = value.strip().lower()
+    return mood if mood in VIDEO_MOODS else None
 
 
 def _find_tracks() -> list[Path]:
@@ -14,6 +36,38 @@ def _find_tracks() -> list[Path]:
     if not MUSIC_DIR.exists():
         return []
     return sorted(MUSIC_DIR.glob("*.mp3"))
+
+
+def _load_track_tags() -> dict[str, set[str]]:
+    """Read music/tracks.yaml into {file name: set of lowercase tags}.
+
+    Returns {} if the file is missing, unreadable or not in the expected shape.
+    With no tags loaded, no track can be matched, so the caller plays no music
+    rather than a random track.
+    """
+    tags_file = MUSIC_DIR / TRACK_TAGS_FILE_NAME
+    try:
+        with open(tags_file, encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+    except FileNotFoundError:
+        log(f"music/{TRACK_TAGS_FILE_NAME} not found — no tracks can be matched by mood")
+        return {}
+    except Exception as e:
+        log(f"Could not read music/{TRACK_TAGS_FILE_NAME} ({e}) — no tracks can be matched by mood")
+        return {}
+
+    if not isinstance(data, dict):
+        log(f"music/{TRACK_TAGS_FILE_NAME} is not a list of file names with tags — no tracks can be matched by mood")
+        return {}
+
+    tags_by_name = {}
+    for name, value in data.items():
+        if isinstance(value, str):
+            value = [value]
+        elif not isinstance(value, list):
+            value = []
+        tags_by_name[str(name)] = {str(t).lower().strip() for t in value if str(t).strip()}
+    return tags_by_name
 
 
 def _get_speech_regions(audio_path: Path, words: list[dict] | None = None) -> list[tuple[float, float]]:
@@ -76,17 +130,6 @@ def build_duck_filter(speech_regions: list[tuple[float, float]], buffer: float =
     return f"volume='if({condition_expr}, {vol_speech}, {vol_gap})':eval=frame"
 
 
-def _score_track(track: Path, keywords: list[str]) -> int:
-    """Score a track filename against mood/tag keywords (case-insensitive substring match)."""
-    name = track.stem.lower().replace("-", " ").replace("_", " ")
-    score = 0
-    for kw in keywords:
-        kw = kw.lower().strip()
-        if kw and kw in name:
-            score += 1
-    return score
-
-
 def select_and_prepare_music(
     voiceover_path: Path,
     work_dir: Path,
@@ -94,9 +137,17 @@ def select_and_prepare_music(
     duck_gap: float = 0.25,
     mood_keywords: list[str] | None = None,
     words: list[dict] | None = None,
+    video_mood: str | None = None,
 ) -> dict:
-    """Select a track matching the niche's mood keywords (falls back to random
-    among top scorers, or fully random if nothing matches), build duck filter.
+    """Select a track whose tags overlap the niche's mood keywords, build duck filter.
+
+    Each track's score is how many of its tags match a keyword (case-insensitive).
+    If video_mood is one of VIDEO_MOODS and the track has that tag, the track
+    gets VIDEO_MOOD_BONUS more points. A random pick is made among the top
+    scorers. If nothing overlaps, or no keywords are given, a random pick is made
+    among tracks tagged "ambient". If there is no ambient track either, no music
+    is used and {} is returned. Tracks that are not listed in music/tracks.yaml
+    have no tags, so they are never picked.
 
     Returns dict with track_path and duck_filter for use by assemble.py.
     """
@@ -105,19 +156,48 @@ def select_and_prepare_music(
         log("No music tracks found in music/ — skipping background music")
         return {}
 
-    if mood_keywords:
-        scored = [(t, _score_track(t, mood_keywords)) for t in tracks]
+    tags_by_name = _load_track_tags()
+    tagged = []
+    untagged = []
+    for t in tracks:
+        if t.name in tags_by_name:
+            tagged.append((t, tags_by_name[t.name]))
+        else:
+            untagged.append(t.name)
+    if untagged:
+        log(f"Not in music/{TRACK_TAGS_FILE_NAME}, so never picked: {', '.join(untagged)}")
+    if not tagged:
+        log("No tagged music tracks available — skipping background music")
+        return {}
+
+    keywords = {kw.lower().strip() for kw in (mood_keywords or []) if kw and kw.strip()}
+    mood = clean_video_mood(video_mood)
+    mood_note = ""
+    if video_mood is not None:
+        if mood:
+            mood_note = f", video mood {mood}"
+            log(f"Video mood: {mood}")
+        else:
+            log(f"Video mood '{video_mood}' is not one of {', '.join(VIDEO_MOODS)} — ignoring it")
+    track = None
+    if keywords or mood:
+        scored = [
+            (t, len(tags & keywords) + (VIDEO_MOOD_BONUS if mood and mood in tags else 0))
+            for t, tags in tagged
+        ]
         best_score = max(s for _, s in scored)
         if best_score > 0:
             candidates = [t for t, s in scored if s == best_score]
             track = random.choice(candidates)
-            log(f"Selected music track (mood match, score {best_score}): {track.name}")
-        else:
-            track = random.choice(tracks)
-            log(f"No mood match found — random pick: {track.name}")
-    else:
-        track = random.choice(tracks)
-        log(f"Selected music track: {track.name}")
+            log(f"Selected music track (mood match, score {best_score}{mood_note}): {track.name}")
+
+    if track is None:
+        ambient = [t for t, tags in tagged if FALLBACK_TAG in tags]
+        if not ambient:
+            log(f"No mood match and no '{FALLBACK_TAG}' track in music/{TRACK_TAGS_FILE_NAME} — skipping background music")
+            return {}
+        track = random.choice(ambient)
+        log(f"No mood match found — '{FALLBACK_TAG}' fallback pick: {track.name}")
 
     # Get speech regions for ducking
     speech_regions = _get_speech_regions(voiceover_path, words=words)

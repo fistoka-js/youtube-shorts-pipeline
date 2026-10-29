@@ -251,6 +251,7 @@ def cmd_produce(args):
             duck_gap=music_config.get("duck_volume_gap", 0.25),
             words=captions_result.get("words"),
             mood_keywords=_mood_kw,
+            video_mood=draft.get("music_mood"),
         )
         state.complete_stage("music", {
             "track_path": str(music_result.get("track_path", "")),
@@ -466,6 +467,7 @@ def cmd_produce_long_form(args):
             duck_gap=music_config.get("duck_volume_gap", 0.25),
             words=captions_result.get("words"),
             mood_keywords=_mood_kw,
+            video_mood=draft.get("music_mood"),
         )
         state.complete_stage("music", {
             "track_path": str(music_result.get("track_path", "")),
