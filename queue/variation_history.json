@@ -96,5 +96,12 @@
     "narrative_structure": "question-led: structure the whole video as a chain of questions, each answered before raising the next",
     "outro_treatment": "reflective wrap-up connecting the specific fact to a bigger idea",
     "visual_treatment": "diagram-and-data: lean into the upper end of the allowed abstract/diagram prompt ratio - more anatomical diagrams, data visualizations, and explanatory graphics than usual"
+  },
+  {
+    "niche": "science",
+    "intro_style": "cold-open curiosity gap: state the most surprising fact immediately, no setup",
+    "narrative_structure": "process-walkthrough: explain a mechanism or system step by step, in the order it actually operates",
+    "outro_treatment": "plain subscribe CTA with no extra framing",
+    "visual_treatment": "stock-footage-led: maximize real subject footage, keep abstract/diagram prompts to the bare minimum needed"
   }
 ]
