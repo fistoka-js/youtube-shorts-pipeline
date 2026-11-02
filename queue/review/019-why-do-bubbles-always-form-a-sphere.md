@@ -57,3 +57,4 @@ Why do bubbles always form a perfect sphere, no matter how you blow them? What i
 
 Bracketed markers removed by the cleaner: 0.
 
+Video: https://youtu.be/3EiCHRChn14
