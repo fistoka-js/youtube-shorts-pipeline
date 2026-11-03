@@ -204,6 +204,9 @@ def get_music_config(profile: dict) -> dict:
         "mood": "ambient, subtle, no lyrics",
         "energy": "medium",
         "tags": [],
+        # None means no limit. A niche sets allowed_tracks in its music block to limit the tracks.
+        "allowed_tracks": None,
+        # No longer read: the music level is now set relative to the voice in verticals/music.py.
         "duck_volume_speech": 0.12,
         "duck_volume_gap": 0.25,
     }

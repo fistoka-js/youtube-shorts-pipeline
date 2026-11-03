@@ -42,6 +42,7 @@ captions:
 music:
   mood: "ambient, subtle"
   energy: "medium"
+  # No longer read: the music level is now set relative to the voice in verticals/music.py.
   duck_volume_speech: 0.12
   duck_volume_gap: 0.25
 thumbnail:

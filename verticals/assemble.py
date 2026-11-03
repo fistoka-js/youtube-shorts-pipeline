@@ -193,6 +193,39 @@ def long_form_frame_counts(frames: list[dict], sections: list[dict],
     return counts
 
 
+# Music fades: 1 s in at the start, 2 s out at the end of the video
+MUSIC_FADE_IN_SECONDS = 1.0
+MUSIC_FADE_OUT_SECONDS = 2.0
+
+
+def build_audio_filter(duration: float, duck_filter: str | None = None,
+                       start_at: float = 0.0, gain_db: float = 0.0,
+                       voice_index: int = 1, music_index: int = 2) -> str:
+    """Filter graph that mixes the music under the voice. Used by assemble_video
+    and by scripts/audition_music_levels.py, so both render the same mix.
+
+    voice_index and music_index are the ffmpeg input numbers. assemble_video has
+    the video as input 0, the voiceover as 1 and the music as 2. The music starts
+    at start_at seconds into the track and loops from there (not from 0 s). It
+    gets gain_db, then the duck volume, then a fade in and out. amix gives both
+    inputs the same weight, so the voice-to-music difference is kept.
+    """
+    fade_out_start = max(duration - MUSIC_FADE_OUT_SECONDS, 0.0)
+    parts = [
+        f"[{music_index}:a]atrim=start={start_at:.3f},asetpts=PTS-STARTPTS",
+        "aloop=loop=-1:size=2e+09",
+        f"atrim=0:{duration:.3f}",
+        f"volume={gain_db:.2f}dB",
+    ]
+    if duck_filter:
+        parts.append(duck_filter)
+    parts.append(f"afade=t=in:st=0:d={MUSIC_FADE_IN_SECONDS:g}")
+    parts.append(f"afade=t=out:st={fade_out_start:.3f}:d={MUSIC_FADE_OUT_SECONDS:g}")
+    music_filter = ",".join(parts) + "[music]"
+    return (f"{music_filter};[{voice_index}:a][music]"
+            f"amix=inputs=2:duration=first:dropout_transition=2[aout]")
+
+
 def assemble_video(
     frames: list[dict],
     voiceover: Path,
@@ -202,6 +235,8 @@ def assemble_video(
     ass_path: str | None = None,
     music_path: str | None = None,
     duck_filter: str | None = None,
+    start_at: float = 0.0,
+    gain_db: float = 0.0,
     title: str | None = None,
     words: list[dict] | None = None,
     width: int = VIDEO_WIDTH,
@@ -287,15 +322,10 @@ segment (one per frame, in order) is appended to it, for the build report."""
     if music_path and Path(music_path).exists():
         cmd = ["ffmpeg", "-i", str(merged_video), "-i", str(voiceover)]
 
-        music_filter = f"[2:a]aloop=loop=-1:size=2e+09,atrim=0:{duration}"
-        if duck_filter:
-            music_filter += f",{duck_filter}"
-        music_filter += "[music]"
-
-        audio_filter = f"{music_filter};[1:a][music]amix=inputs=2:duration=first:dropout_transition=2[aout]"
+        audio_filter = build_audio_filter(duration, duck_filter, start_at, gain_db)
 
         cmd += [
-            "-stream_loop", "-1", "-i", str(music_path),
+            "-i", str(music_path),
             "-filter_complex", audio_filter,
         ]
 

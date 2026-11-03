@@ -7,34 +7,176 @@
 # niche's music.tags (for example, the science niche uses "cosmic", "ambient",
 # "wonder", "cinematic" and "space"). Every .mp3 in this folder should have an
 # entry here, and every entry should match a file in this folder.
+#
+# Each entry is either the plain tag list (as before: starts at 0 s, no gain
+# change) or a mapping with these fields. The numbers are written by
+# scripts/measure_music_tracks.py, which re-measures every track with ffmpeg
+# ebur128 and rewrites this file. Re-run it if a track file changes.
+#   tags        the mood tags above
+#   steady_lufs loudness of the track's loud part (measured)
+#   start_lufs  integrated loudness of the 3 s clip that playback hears from
+#               start_at, measured on a clip cut at start_at (measured)
+#   start_at    seconds into the track where playback starts, chosen so that
+#               the 3 s from there are within 3 dB of steady (measured)
+#   gain_db     gain that brings steady_lufs to the single target -16 LUFS
+#               (computed; the target is a choice)
+#   unusable    true means the track never reaches its steady loudness within
+#               45 s. It has no start_at and is never picked.
+#
+# Which tracks a niche may pick is set by allowed_tracks in that niche's music
+# block (for example niches/science.yaml). This file only holds the data for each
+# track; it does not limit which tracks can be picked.
 
-pulsar.mp3: [cosmic, ambient, calm, space, wonder]
-event-horizon.mp3: [cosmic, ambient, calm, space, wonder]
-singularity.mp3: [cosmic, ambient, calm, space, wonder]
-laniakea.mp3: [cosmic, ambient, calm, space, wonder]
-nebula.mp3: [cosmic, ambient, calm, space, wonder]
+pulsar.mp3:
+  tags: [cosmic, ambient, calm, space, wonder]
+  steady_lufs: -10.7
+  start_lufs: -13.7
+  start_at: 16.6
+  gain_db: -5.3
+event-horizon.mp3:
+  tags: [cosmic, ambient, calm, space, wonder]
+  steady_lufs: -11.1
+  start_lufs: -13.3
+  start_at: 28.8
+  gain_db: -4.9
+singularity.mp3:
+  tags: [cosmic, ambient, calm, space, wonder]
+  steady_lufs: -12.8
+  start_lufs: -15.6
+  start_at: 16.1
+  gain_db: -3.2
+laniakea.mp3:
+  tags: [cosmic, ambient, calm, space, wonder]
+  steady_lufs: -11.5
+  unusable: true  # never reaches steady loudness within 45 s: never picked
+nebula.mp3:
+  tags: [cosmic, ambient, calm, space, wonder]
+  steady_lufs: -11.1
+  start_lufs: -14.0
+  start_at: 3.3
+  gain_db: -4.9
 
-rapid-unscheduled-disassembly.mp3: [mysterious, dramatic, dark, space]
-false-vacuum-decay.mp3: [mysterious, dramatic, dark, space]
-red-shift.mp3: [mysterious, dramatic, dark, space]
+rapid-unscheduled-disassembly.mp3:
+  tags: [mysterious, dramatic, dark, space]
+  steady_lufs: -12.5
+  start_lufs: -15.5
+  start_at: 17.8
+  gain_db: -3.5
+false-vacuum-decay.mp3:
+  tags: [mysterious, dramatic, dark, space]
+  steady_lufs: -11.2
+  start_lufs: -11.3
+  start_at: 16.4
+  gain_db: -4.8
+red-shift.mp3:
+  tags: [mysterious, dramatic, dark, space]
+  steady_lufs: -12.7
+  start_lufs: -15.6
+  start_at: 25.3
+  gain_db: -3.3
 
-spaghettification.mp3: [hopeful, wonder, bright, space]
-frame-dragging.mp3: [hopeful, wonder, bright, space]
+spaghettification.mp3:
+  tags: [hopeful, wonder, bright, space]
+  steady_lufs: -11.4
+  start_lufs: -14.3
+  start_at: 15.6
+  gain_db: -4.6
+frame-dragging.mp3:
+  tags: [hopeful, wonder, bright, space]
+  steady_lufs: -12.2
+  start_lufs: -15.2
+  start_at: 25.7
+  gain_db: -3.8
 
-turn-in-the-sun.mp3: [hopeful, wonder, inspirational, cinematic]
-way-back-home.mp3: [hopeful, wonder, inspirational, cinematic]
+turn-in-the-sun.mp3:
+  tags: [hopeful, wonder, inspirational, cinematic]
+  steady_lufs: -12.5
+  start_lufs: -15.4
+  start_at: 1.7
+  gain_db: -3.5
+way-back-home.mp3:
+  tags: [hopeful, wonder, inspirational, cinematic]
+  steady_lufs: -22.5
+  start_lufs: -25.4
+  start_at: 18.8
+  gain_db: 6.5
 
-caribbean-hide-and-seek.mp3: [quirky, playful, funky, light]
-fun-house-trap.mp3: [quirky, playful, funky, light]
-critter-cruise.mp3: [quirky, playful, funky, light]
+caribbean-hide-and-seek.mp3:
+  tags: [quirky, playful, funky, light]
+  steady_lufs: -10.9
+  start_lufs: -12.7
+  start_at: 0.0
+  gain_db: -5.1
+fun-house-trap.mp3:
+  tags: [quirky, playful, funky, light]
+  steady_lufs: -12.8
+  start_lufs: -15.6
+  start_at: 7.1
+  gain_db: -3.2
+critter-cruise.mp3:
+  tags: [quirky, playful, funky, light]
+  steady_lufs: -19.7
+  start_lufs: -22.5
+  start_at: 14.6
+  gain_db: 3.7
 
-alexgrohl-sad-soul-hip-hop-185750.mp3: [sad, soul, hip-hop]
-jonasblakewood-inspiring-music-562845.mp3: [inspiring]
-jonasblakewood-pop-524132.mp3: [pop]
-leberch-children-quirky-254763.mp3: [children]
-leberch-cosy-quirky-248029.mp3: [cosy]
-leberch-hip-hop-516914.mp3: [hip-hop]
-leberch-lofi-hip-hop-519408.mp3: [lofi, hip-hop]
-leberch-mystery-quirky-355604.mp3: [mystery]
-leberch-quirky-501484.mp3: []
-paulyudin-technology-tech-technology-484304.mp3: [technology, tech]
+alexgrohl-sad-soul-hip-hop-185750.mp3:
+  tags: [sad, soul, hip-hop]
+  steady_lufs: -11.0
+  start_lufs: -13.8
+  start_at: 12.3
+  gain_db: -5.0
+jonasblakewood-inspiring-music-562845.mp3:
+  tags: [inspiring]
+  steady_lufs: -16.6
+  start_lufs: -17.0
+  start_at: 0.0
+  gain_db: 0.6
+jonasblakewood-pop-524132.mp3:
+  tags: [pop]
+  steady_lufs: -7.5
+  start_lufs: -10.4
+  start_at: 12.6
+  gain_db: -8.5
+leberch-children-quirky-254763.mp3:
+  tags: [children]
+  steady_lufs: -18.8
+  start_lufs: -21.5
+  start_at: 0.1
+  gain_db: 2.8
+leberch-cosy-quirky-248029.mp3:
+  tags: [cosy]
+  steady_lufs: -20.9
+  start_lufs: -23.4
+  start_at: 0.1
+  gain_db: 4.9
+leberch-hip-hop-516914.mp3:
+  tags: [hip-hop]
+  steady_lufs: -10.4
+  start_lufs: -10.6
+  start_at: 0.0
+  gain_db: -5.6
+leberch-lofi-hip-hop-519408.mp3:
+  tags: [lofi, hip-hop]
+  steady_lufs: -11.9
+  start_lufs: -13.6
+  start_at: 0.0
+  gain_db: -4.1
+leberch-mystery-quirky-355604.mp3:
+  tags: [mystery]
+  steady_lufs: -16.9
+  start_lufs: -19.5
+  start_at: 0.0
+  gain_db: 0.9
+leberch-quirky-501484.mp3:
+  tags: []
+  steady_lufs: -14.7
+  start_lufs: -17.2
+  start_at: 33.2
+  gain_db: -1.3
+paulyudin-technology-tech-technology-484304.mp3:
+  tags: [technology, tech]
+  steady_lufs: -11.7
+  start_lufs: -14.7
+  start_at: 2.6
+  gain_db: -4.3

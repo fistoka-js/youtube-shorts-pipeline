@@ -64,6 +64,12 @@ music:
   mood: "cosmic ambient, wonder, hans zimmer inspired, no lyrics"
   energy: "medium, building"
   tags: ["cosmic", "ambient", "wonder", "cinematic", "space"]
+  # Only these music/ files may be picked for this niche, whatever the video's
+  # music_mood says. Mysterious, hopeful and quirky tracks are left out until Jacob
+  # has listened to them. To widen the choice, add file names here. Remove this key
+  # to lift the limit. Unusable tracks (music/tracks.yaml) are skipped either way.
+  allowed_tracks: ["pulsar.mp3", "event-horizon.mp3", "singularity.mp3", "laniakea.mp3", "nebula.mp3"]
+  # No longer read: the music level is now set relative to the voice in verticals/music.py.
   duck_volume_speech: 0.10
   duck_volume_gap: 0.22
 thumbnail:

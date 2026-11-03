@@ -122,6 +122,29 @@ def cmd_draft(args):
     return out_path
 
 
+def _music_result_from_state(state, allowed_tracks=None) -> dict:
+    """Read the saved music step for a resumed run.
+
+    A music step saved before start_at and gain_db existed has no start_at. It
+    falls back to starting at 0 s with no gain, and the saved duck filter and
+    track are the old ones. That is logged, so it is not silent.
+    """
+    result = {
+        "track_path": state.get_artifact("music", "track_path", ""),
+        "duck_filter": state.get_artifact("music", "duck_filter", ""),
+        "start_at": state.get_artifact("music", "start_at", 0.0),
+        "gain_db": state.get_artifact("music", "gain_db", 0.0),
+    }
+    if result["track_path"] and state.get_artifact("music", "start_at") is None:
+        log("WARNING: the saved music step was made before start/gain were saved. "
+            "Using the saved track from 0 s with no gain, and the old duck levels. "
+            "Re-run with --force to rebuild the music with the new mix.")
+    if allowed_tracks is not None and result["track_path"] and Path(result["track_path"]).name not in allowed_tracks:
+        log(f"WARNING: the saved music track {Path(result['track_path']).name} is not in this niche's "
+            "allowed_tracks, but the resumed run keeps it. Re-run with --force to pick a track from the list.")
+    return result
+
+
 def cmd_produce(args):
     from .broll import generate_broll, estimate_slot_seconds
     from .tts import generate_voiceover
@@ -247,22 +270,20 @@ def cmd_produce(args):
         _mood_kw += [str(t).strip() for t in music_config.get("tags", [])]
         music_result = select_and_prepare_music(
             vo_path, work_dir,
-            duck_speech=music_config.get("duck_volume_speech", 0.12),
-            duck_gap=music_config.get("duck_volume_gap", 0.25),
             words=captions_result.get("words"),
             mood_keywords=_mood_kw,
             video_mood=draft.get("music_mood"),
+            allowed_tracks=music_config.get("allowed_tracks"),
         )
         state.complete_stage("music", {
             "track_path": str(music_result.get("track_path", "")),
             "duck_filter": music_result.get("duck_filter", ""),
+            "start_at": music_result.get("start_at", 0.0),
+            "gain_db": music_result.get("gain_db", 0.0),
         })
     else:
         log("Skipping music (already done)")
-        music_result = {
-            "track_path": state.get_artifact("music", "track_path", ""),
-            "duck_filter": state.get_artifact("music", "duck_filter", ""),
-        }
+        music_result = _music_result_from_state(state, music_config.get("allowed_tracks"))
 
     # Assemble
     if force or not state.is_done("assemble"):
@@ -277,6 +298,8 @@ def cmd_produce(args):
             ass_path=captions_result.get("ass_path"),
             music_path=music_result.get("track_path"),
             duck_filter=music_result.get("duck_filter"),
+            start_at=music_result.get("start_at") or 0.0,
+            gain_db=music_result.get("gain_db") or 0.0,
             words=captions_result.get("words"),
             slot_out=slot_seconds,
         )
@@ -463,22 +486,20 @@ def cmd_produce_long_form(args):
         _mood_kw += [str(t).strip() for t in music_config.get("tags", [])]
         music_result = select_and_prepare_music(
             vo_path, work_dir,
-            duck_speech=music_config.get("duck_volume_speech", 0.12),
-            duck_gap=music_config.get("duck_volume_gap", 0.25),
             words=captions_result.get("words"),
             mood_keywords=_mood_kw,
             video_mood=draft.get("music_mood"),
+            allowed_tracks=music_config.get("allowed_tracks"),
         )
         state.complete_stage("music", {
             "track_path": str(music_result.get("track_path", "")),
             "duck_filter": music_result.get("duck_filter", ""),
+            "start_at": music_result.get("start_at", 0.0),
+            "gain_db": music_result.get("gain_db", 0.0),
         })
     else:
         log("Skipping music (already done)")
-        music_result = {
-            "track_path": state.get_artifact("music", "track_path", ""),
-            "duck_filter": state.get_artifact("music", "duck_filter", ""),
-        }
+        music_result = _music_result_from_state(state, music_config.get("allowed_tracks"))
 
     # Assemble (landscape dimensions for long-form)
     if force or not state.is_done("assemble"):
@@ -493,6 +514,8 @@ def cmd_produce_long_form(args):
             ass_path=captions_result.get("ass_path"),
             music_path=music_result.get("track_path"),
             duck_filter=music_result.get("duck_filter"),
+            start_at=music_result.get("start_at") or 0.0,
+            gain_db=music_result.get("gain_db") or 0.0,
             words=captions_result.get("words"),
             width=lf_width, height=lf_height,
             sections=sections,

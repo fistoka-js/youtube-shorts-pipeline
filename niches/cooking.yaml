@@ -66,6 +66,7 @@ music:
   mood: "acoustic, warm, light jazz, cozy, no lyrics"
   energy: "low to medium"
   tags: ["acoustic", "jazz", "warm", "cozy"]
+  # No longer read: the music level is now set relative to the voice in verticals/music.py.
   duck_volume_speech: 0.10
   duck_volume_gap: 0.20
 thumbnail:

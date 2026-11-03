@@ -71,6 +71,7 @@ music:
   mood: "ambient, subtle tension, no lyrics, corporate documentary feel"
   energy: "low to medium"
   tags: ["ambient", "corporate", "documentary"]
+  # No longer read: the music level is now set relative to the voice in verticals/music.py.
   duck_volume_speech: 0.10
   duck_volume_gap: 0.20
 thumbnail:

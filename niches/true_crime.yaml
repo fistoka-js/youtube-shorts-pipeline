@@ -63,6 +63,7 @@ music:
   mood: "dark ambient, tension, suspense, no lyrics, horror documentary"
   energy: "low"
   tags: ["dark", "ambient", "suspense", "tension", "noir"]
+  # No longer read: the music level is now set relative to the voice in verticals/music.py.
   duck_volume_speech: 0.08
   duck_volume_gap: 0.18
 thumbnail:

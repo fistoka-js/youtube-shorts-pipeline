@@ -67,6 +67,7 @@ music:
   mood: "upbeat electronic, motivational, gym energy, no lyrics"
   energy: "high"
   tags: ["workout", "electronic", "motivational", "energy"]
+  # No longer read: the music level is now set relative to the voice in verticals/music.py.
   duck_volume_speech: 0.12
   duck_volume_gap: 0.28
 thumbnail:
