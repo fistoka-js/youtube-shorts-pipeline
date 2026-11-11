@@ -131,5 +131,12 @@
     "narrative_structure": "process-walkthrough: explain a mechanism or system step by step, in the order it actually operates",
     "outro_treatment": "reflective wrap-up connecting the specific fact to a bigger idea",
     "visual_treatment": "still-image-with-motion: allow more still-photo-style prompts (landscapes, close-ups, portraits) that work well with Ken Burns pans/zooms, alongside video clips"
+  },
+  {
+    "niche": "science",
+    "intro_style": "cold-open curiosity gap: state the most surprising fact immediately, no setup",
+    "narrative_structure": "what-if: explore a hypothetical framing throughout (what if this trait didn't exist, etc.)",
+    "outro_treatment": "forward-looking teaser about a related unanswered question",
+    "visual_treatment": "diagram-and-data: lean into the upper end of the allowed abstract/diagram prompt ratio - more anatomical diagrams, data visualizations, and explanatory graphics than usual"
   }
 ]
