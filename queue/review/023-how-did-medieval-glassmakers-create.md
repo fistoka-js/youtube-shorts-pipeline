@@ -72,3 +72,4 @@ Medieval glassmakers could turn plain sand into something that looked like froze
 
 Bracketed markers removed by the cleaner: 0 in the first script, 0 in the redraft.
 
+Video: https://youtu.be/IWSjxkB0hQU
