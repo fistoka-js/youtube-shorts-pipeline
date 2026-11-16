@@ -82,3 +82,4 @@ Why does salt melt ice on roads? The answer took scientists centuries to fully u
 
 Bracketed markers removed by the cleaner: 0 in the first script, 0 in the redraft.
 
+Video: https://youtu.be/C-ZyhCVR08M
