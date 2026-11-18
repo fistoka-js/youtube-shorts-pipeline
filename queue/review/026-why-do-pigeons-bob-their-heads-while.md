@@ -56,3 +56,4 @@ Picture this: a pigeon strutting toward you on a city sidewalk, head jerking for
 
 Bracketed markers removed by the cleaner: 0.
 
+Video: https://youtu.be/CY38jEcC9ms
